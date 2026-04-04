@@ -57,77 +57,71 @@ def bradley_terry(p1_win_prob: float, p2_win_prob: float) -> tuple[float, float]
     return p1_win_prob / total, p2_win_prob / total
 
 
+def _normalize_name(name: str) -> str:
+    """
+    Normalize player name to lowercase 'first last' for fuzzy matching.
+    Handles both 'First Last' and 'Last, First' formats.
+    """
+    name = name.strip()
+    if "," in name:
+        parts = name.split(",", 1)
+        name = f"{parts[1].strip()} {parts[0].strip()}"
+    return name.lower()
+
+
 def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    import sys
     matchups = raw.get("match_list") or raw.get("matchups") or raw.get("data", [])
     if not matchups:
         return pd.DataFrame()
-    # Debug: show structure of first item so we can verify field names
-    print(f"[debug] first match keys: {list(matchups[0].keys())}", file=sys.stderr)
-    print(f"[debug] first match sample: {matchups[0]}", file=sys.stderr)
 
-    # Build model lookup: player_name -> model_win_prob
+    # Build model lookup keyed by normalized name (handles First Last and Last, First)
     model_lookup: dict = {}
     if model_df is not None and "model_win_prob" in model_df.columns:
         for _, r in model_df.iterrows():
-            name = (r.get("player_name") or "").strip().lower()
+            name = (r.get("player_name") or "").strip()
             if name:
-                model_lookup[name] = r["model_win_prob"]
+                model_lookup[_normalize_name(name)] = r["model_win_prob"]
 
     rows = []
     for m in matchups:
         p1_name = (m.get("p1_player_name") or m.get("p1") or "").strip()
         p2_name = (m.get("p2_player_name") or m.get("p2") or "").strip()
-        p1_dg_id = m.get("p1_dg_id")
-        p2_dg_id = m.get("p2_dg_id")
 
-        # DataGolf's own matchup probability
-        p1_dg = _to_float(m.get("p1_dg_win_prob") or m.get("p1_win_prob"))
-        p2_dg = _to_float(m.get("p2_dg_win_prob") or m.get("p2_win_prob"))
-        if p1_dg is not None and p2_dg is not None:
-            p1_dg_fair, p2_dg_fair = remove_vig(p1_dg, p2_dg)
+        # Odds section: {"bet365": {"p1": "+135", "p2": "-160"}, "datagolf": {...}, ...}
+        odds_section = m.get("odds") or {}
+
+        # Extract DataGolf's own probability from odds.datagolf (it's American odds)
+        dg_odds = odds_section.get("datagolf") or {}
+        p1_dg_raw = american_to_prob(_to_float(dg_odds.get("p1")))
+        p2_dg_raw = american_to_prob(_to_float(dg_odds.get("p2")))
+        if p1_dg_raw is not None and p2_dg_raw is not None:
+            p1_dg_fair, p2_dg_fair = remove_vig(p1_dg_raw, p2_dg_raw)
         else:
             p1_dg_fair = p2_dg_fair = None
 
         # Our model's matchup probability via Bradley-Terry
-        p1_model = model_lookup.get(p1_name.lower())
-        p2_model = model_lookup.get(p2_name.lower())
+        p1_model = model_lookup.get(_normalize_name(p1_name))
+        p2_model = model_lookup.get(_normalize_name(p2_name))
         if p1_model is not None and p2_model is not None:
             p1_our, p2_our = bradley_terry(p1_model, p2_model)
         else:
             p1_our = p2_our = None
 
-        # Odds section — may be nested under "odds" or flat with book-prefixed keys
-        odds_section = m.get("odds") or {}
-
-        # Collect all books present
-        books_found = set()
-        if isinstance(odds_section, dict):
-            books_found.update(odds_section.keys())
-        # Also check flat keys like "draftkings_p1"
-        for key in m.keys():
-            for book in KNOWN_BOOKS:
-                if key.startswith(book):
-                    books_found.add(book)
-
+        # Real sportsbooks (exclude 'datagolf' pseudo-book)
+        books_found = [k for k in odds_section.keys() if k != "datagolf"]
         if not books_found:
-            # No book odds — still emit one row with model/DG probs only
-            books_found.add(None)
+            books_found = [None]
 
         for book in books_found:
             p1_odds_raw = p2_odds_raw = None
 
-            if book and isinstance(odds_section, dict) and book in odds_section:
+            if book and book in odds_section:
                 book_data = odds_section[book]
                 if isinstance(book_data, dict):
-                    p1_odds_raw = _to_float(book_data.get("p1") or book_data.get("p1_odds"))
-                    p2_odds_raw = _to_float(book_data.get("p2") or book_data.get("p2_odds"))
-            elif book:
-                # Try flat keys
-                p1_odds_raw = _to_float(m.get(f"{book}_p1") or m.get(f"p1_{book}"))
-                p2_odds_raw = _to_float(m.get(f"{book}_p2") or m.get(f"p2_{book}"))
+                    p1_odds_raw = _to_float(book_data.get("p1"))
+                    p2_odds_raw = _to_float(book_data.get("p2"))
 
-            # Convert book American odds to fair probs
+            # Convert American odds strings to fair probs (vig removed)
             if p1_odds_raw is not None and p2_odds_raw is not None:
                 p1_mkt_raw = american_to_prob(p1_odds_raw)
                 p2_mkt_raw = american_to_prob(p2_odds_raw)
