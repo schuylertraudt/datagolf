@@ -109,23 +109,17 @@ class RankingModel:
         """
         rows = []
         if pre_tournament:
-            import sys
-            print(f"[debug] predictions top-level keys: {list(raw.keys())}", file=sys.stderr)
-            field = raw.get("field", [])
-            if field:
-                print(f"[debug] first field player keys: {list(field[0].keys())}", file=sys.stderr)
-                print(f"[debug] first field player sample: {field[0]}", file=sys.stderr)
-            else:
-                print(f"[debug] 'field' key is empty or missing", file=sys.stderr)
-            for p in field:
-                baseline = p.get("baseline", p)
+            # Response structure: {"event_name": "...", "baseline": [{dg_id, player_name,
+            #   win, top_5, top_10, make_cut, ...}], "baseline_history_fit": [...], ...}
+            players = raw.get("baseline") or raw.get("field", [])
+            for p in players:
                 rows.append({
                     "dg_id": p.get("dg_id"),
                     "player_name": p.get("player_name"),
-                    "win_prob": _to_float(baseline.get("win")),
-                    "top5_prob": _to_float(baseline.get("top_5")),
-                    "top10_prob": _to_float(baseline.get("top_10")),
-                    "make_cut_prob": _to_float(baseline.get("make_cut")),
+                    "win_prob": _to_float(p.get("win")),
+                    "top5_prob": _to_float(p.get("top_5")),
+                    "top10_prob": _to_float(p.get("top_10")),
+                    "make_cut_prob": _to_float(p.get("make_cut")),
                 })
         else:
             for p in raw.get("data", []):

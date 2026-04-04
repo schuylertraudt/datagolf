@@ -410,7 +410,6 @@ def main():
             (predictions_raw or {}).get("event_name")
             or (predictions_raw or {}).get("event")
             or short_raw.get("event_name")
-            or short_raw.get("event")
             or "Pre-Tournament Rankings"
         )
         last_updated = short_raw.get("last_updated", "")
