@@ -109,7 +109,15 @@ class RankingModel:
         """
         rows = []
         if pre_tournament:
-            for p in raw.get("field", []):
+            import sys
+            print(f"[debug] predictions top-level keys: {list(raw.keys())}", file=sys.stderr)
+            field = raw.get("field", [])
+            if field:
+                print(f"[debug] first field player keys: {list(field[0].keys())}", file=sys.stderr)
+                print(f"[debug] first field player sample: {field[0]}", file=sys.stderr)
+            else:
+                print(f"[debug] 'field' key is empty or missing", file=sys.stderr)
+            for p in field:
                 baseline = p.get("baseline", p)
                 rows.append({
                     "dg_id": p.get("dg_id"),
