@@ -59,21 +59,12 @@ def bradley_terry(p1_win_prob: float, p2_win_prob: float) -> tuple[float, float]
 
 def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     import sys
-    print(f"[debug] matchups top-level keys: {list(raw.keys())}", file=sys.stderr)
-    matchups = raw.get("matchups", [])
+    matchups = raw.get("match_list") or raw.get("matchups") or raw.get("data", [])
     if not matchups:
-        # Try other common top-level keys
-        for key in ("data", "round_matchups", "matchup_list", "results"):
-            if raw.get(key):
-                matchups = raw[key]
-                print(f"[debug] found matchups under key '{key}', count={len(matchups)}", file=sys.stderr)
-                break
-    if matchups:
-        print(f"[debug] first matchup keys: {list(matchups[0].keys())}", file=sys.stderr)
-        print(f"[debug] first matchup sample: {matchups[0]}", file=sys.stderr)
-    else:
-        print(f"[debug] no matchup list found in response", file=sys.stderr)
         return pd.DataFrame()
+    # Debug: show structure of first item so we can verify field names
+    print(f"[debug] first match keys: {list(matchups[0].keys())}", file=sys.stderr)
+    print(f"[debug] first match sample: {matchups[0]}", file=sys.stderr)
 
     # Build model lookup: player_name -> model_win_prob
     model_lookup: dict = {}
