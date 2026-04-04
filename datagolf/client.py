@@ -84,6 +84,40 @@ class DataGolfClient:
         """
         return self._get("preds/skill-ratings", {"display": display})
 
+    def get_matchups(
+        self,
+        tour: str = "pga",
+        market: str = "round_matchups",
+        odds_format: str = "american",
+    ) -> dict:
+        """
+        Head-to-head round or tournament matchup odds from DraftKings, FanDuel,
+        and other books, alongside DataGolf's own matchup probability.
+
+        market: 'round_matchups' (today's round) or 'tournament_matchups' (72-hole)
+        odds_format: 'american', 'decimal', or 'percent'
+        """
+        return self._get(
+            "betting-tools/matchups",
+            {"tour": tour, "market": market, "odds_format": odds_format},
+        )
+
+    def get_3_balls(
+        self,
+        tour: str = "pga",
+        odds_format: str = "american",
+    ) -> dict:
+        """
+        3-ball betting odds (best score among a group of 3 players for a round)
+        from DraftKings, FanDuel, and other books, with DataGolf probabilities.
+
+        odds_format: 'american', 'decimal', or 'percent'
+        """
+        return self._get(
+            "betting-tools/3-balls",
+            {"tour": tour, "odds_format": odds_format},
+        )
+
     def get_historical_sg_stats(
         self,
         tour: str = "pga",
