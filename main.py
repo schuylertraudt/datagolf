@@ -35,6 +35,7 @@ from rich.rule import Rule
 from rich.table import Table
 
 from datagolf.client import DataGolfClient
+from datagolf.matchups import parse_matchups, prob_to_american as mu_prob_to_american
 from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel, american_to_prob
 
 
@@ -74,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip prediction fetching; rank by SG stats only")
     p.add_argument("--no-prompt", action="store_true",
                    help="Skip interactive weight/blend prompts; use defaults or --weight-* flags")
+    p.add_argument("--matchups", action="store_true",
+                   help="Fetch DK/FD matchup lines and show edges vs your model odds")
+    p.add_argument("--matchups-market", default="round_matchups",
+                   choices=["round_matchups", "tournament_matchups"],
+                   help="Matchup market to fetch (default: round_matchups)")
+    p.add_argument("--matchups-min-edge", type=float, default=0.03,
+                   help="Minimum edge to display a matchup (default: 0.03 = 3%%)")
     p.add_argument("--odds-file",
                    help="Path to CSV with market odds. Required columns: player_name + one of "
                         "market_win_prob (decimal 0-1), market_odds_american, or market_odds_decimal")
@@ -511,6 +519,124 @@ def main():
                     f"Mkt: {row['market_win_prob']*100:.1f}%  "
                     f"Edge: [green]+{row['edge']*100:.1f}%[/green]"
                 )
+
+    # --- Matchups ---
+    if args.matchups:
+        console.print()
+        console.print(f"[bold cyan]Matchup edges — {args.matchups_market.replace('_', ' ').title()}[/bold cyan]")
+        with console.status("[cyan]Fetching matchup lines…[/cyan]"):
+            try:
+                matchups_raw = client.get_matchups(tour=args.tour, market=args.matchups_market)
+            except Exception as exc:
+                console.print(f"[red]Failed to fetch matchups:[/red] {exc}")
+                matchups_raw = None
+
+        if matchups_raw:
+            mu_df = parse_matchups(matchups_raw, model_df=df)
+            display_matchups(mu_df, min_edge=args.matchups_min_edge)
+
+
+def display_matchups(mu_df: pd.DataFrame, min_edge: float = 0.03):
+    if mu_df.empty:
+        console.print("[dim]No matchup data returned.[/dim]")
+        return
+
+    # Filter to rows with at least one side meeting the edge threshold
+    has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
+    if has_model:
+        edge_mask = (
+            (mu_df["p1_edge"].fillna(0) >= min_edge) |
+            (mu_df["p2_edge"].fillna(0) >= min_edge)
+        )
+        show_df = mu_df[edge_mask].copy()
+    else:
+        show_df = mu_df.copy()
+
+    if show_df.empty:
+        console.print(f"[dim]No matchups with edge ≥ {min_edge:.0%}. "
+                      "Try --matchups-min-edge 0.01 to lower the threshold.[/dim]")
+        return
+
+    # Deduplicate: if multiple books, pick best edge per matchup
+    show_df = (
+        show_df.sort_values("max_edge", ascending=False)
+        .drop_duplicates(subset=["p1_name", "p2_name"], keep="first")
+        .reset_index(drop=True)
+    )
+
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="bold", pad_edge=False)
+    t.add_column("Player A",    min_width=22, no_wrap=True)
+    t.add_column("Player B",    min_width=22, no_wrap=True)
+    t.add_column("Book",        width=12)
+    t.add_column("Line A",      justify="right", min_width=7)
+    t.add_column("Line B",      justify="right", min_width=7)
+    if has_model:
+        t.add_column("Our A",   justify="right", min_width=7)
+        t.add_column("Our B",   justify="right", min_width=7)
+        t.add_column("Edge A",  justify="right", min_width=7)
+        t.add_column("Edge B",  justify="right", min_width=7)
+        t.add_column("Bet",     min_width=22, no_wrap=True)
+
+    for _, row in show_df.iterrows():
+        p1_edge = row.get("p1_edge")
+        p2_edge = row.get("p2_edge")
+
+        # Highlight the side with positive edge
+        if p1_edge is not None and p1_edge >= min_edge:
+            p1_label = f"[green]{row['p1_name']}[/green]"
+        else:
+            p1_label = row["p1_name"]
+
+        if p2_edge is not None and p2_edge >= min_edge:
+            p2_label = f"[green]{row['p2_name']}[/green]"
+        else:
+            p2_label = row["p2_name"]
+
+        def _fmt_odds(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return "[dim]-[/dim]"
+            return f"+{int(v)}" if v > 0 else str(int(v))
+
+        def _fmt_edge(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return "[dim]-[/dim]"
+            s = f"{v*100:+.1f}%"
+            return f"[green]{s}[/green]" if v >= min_edge else f"[dim]{s}[/dim]"
+
+        # Best side to bet
+        if has_model:
+            if p1_edge is not None and p2_edge is not None:
+                if p1_edge >= min_edge and p1_edge >= p2_edge:
+                    bet = f"[green]→ {row['p1_name']}[/green]"
+                elif p2_edge >= min_edge:
+                    bet = f"[green]→ {row['p2_name']}[/green]"
+                else:
+                    bet = "[dim]no edge[/dim]"
+            elif p1_edge is not None and p1_edge >= min_edge:
+                bet = f"[green]→ {row['p1_name']}[/green]"
+            elif p2_edge is not None and p2_edge >= min_edge:
+                bet = f"[green]→ {row['p2_name']}[/green]"
+            else:
+                bet = "[dim]no edge[/dim]"
+
+        cells = [
+            p1_label,
+            p2_label,
+            str(row.get("book") or ""),
+            _fmt_odds(row.get("p1_book_odds")),
+            _fmt_odds(row.get("p2_book_odds")),
+        ]
+        if has_model:
+            cells += [
+                mu_prob_to_american(row.get("p1_our_prob")),
+                mu_prob_to_american(row.get("p2_our_prob")),
+                _fmt_edge(p1_edge),
+                _fmt_edge(p2_edge),
+                bet,
+            ]
+        t.add_row(*cells)
+
+    console.print(t)
 
 
 if __name__ == "__main__":
