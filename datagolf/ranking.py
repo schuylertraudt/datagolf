@@ -311,6 +311,49 @@ class RankingModel:
         stat_cols = [s for s in SG_STATS if s in merged.columns]
         return merged[base_cols + stat_cols].copy()
 
+    def blend_win_probs(
+        self,
+        df: pd.DataFrame,
+        dg_weight: float = 0.5,
+        temperature: float = 1.0,
+    ) -> pd.DataFrame:
+        """
+        Derive adjusted win probabilities by blending DataGolf's win_prob with
+        probabilities implied by the composite score.
+
+        Composite scores (z-scores) are converted to a probability distribution
+        via softmax, then blended with DataGolf probs:
+
+            model_win_prob = dg_weight * dg_prob + (1 - dg_weight) * composite_prob
+
+        Result is re-normalized to sum to 1 and stored in 'model_win_prob'.
+
+        Args:
+            dg_weight:   0 = ignore DataGolf entirely, 1 = use DataGolf only.
+            temperature: Controls how spread out composite probabilities are.
+                         Lower = more concentrated on top-ranked players (default 1.0).
+        """
+        # Softmax over composite scores
+        scores = df["composite_score"].fillna(0.0)
+        scaled = scores / temperature
+        exp_s = np.exp(scaled - scaled.max())  # subtract max for numerical stability
+        composite_prob = exp_s / exp_s.sum()
+
+        # DataGolf probs — fill missing with equal share
+        dg_prob = df["win_prob"].copy()
+        dg_prob = dg_prob.fillna(1.0 / len(df))
+        # Re-normalize DG probs in case they don't sum to 1
+        dg_total = dg_prob.sum()
+        if dg_total > 0:
+            dg_prob = dg_prob / dg_total
+
+        blended = dg_weight * dg_prob + (1.0 - dg_weight) * composite_prob
+        blended = blended / blended.sum()  # ensure sums to 1
+
+        df = df.copy()
+        df["model_win_prob"] = blended
+        return df
+
     def _add_edge(self, df: pd.DataFrame, market_odds: pd.DataFrame) -> pd.DataFrame:
         """
         Merge market implied probabilities and compute edge.
