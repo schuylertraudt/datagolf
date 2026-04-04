@@ -121,7 +121,7 @@ def resolve_weights(args) -> dict:
 # ---------------------------------------------------------------------------
 
 # Default history blend config
-DEFAULT_HISTORY = {"short_rounds": 12, "long_rounds": 36, "short_weight": 0.60}
+DEFAULT_HISTORY = {"short_rounds": 12, "long_rounds": 60, "short_weight": 0.60}
 
 # Labels for each weight key used in prompts
 _WEIGHT_LABELS: dict[str, str] = {
