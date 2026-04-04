@@ -230,50 +230,74 @@ def main():
     client = DataGolfClient(api_key)
     model = RankingModel(resolve_weights(args))
 
-    # --- Fetch live stats ---
-    with console.status("[cyan]Fetching live tournament stats…[/cyan]"):
-        try:
-            live_raw = client.get_live_tournament_stats(tour=args.tour, round=args.round)
-        except Exception as exc:
-            console.print(f"[red]Failed to fetch live stats:[/red] {exc}")
-            sys.exit(1)
-
-    # --- Fetch predictions ---
-    predictions_raw = None
-    if not args.no_predictions:
-        label = "pre-tournament" if args.pre_tournament else "in-play"
-        with console.status(f"[cyan]Fetching {label} predictions…[/cyan]"):
+    # --- Fetch stats and predictions ---
+    if args.pre_tournament:
+        # Pre-tournament: use rolling SG history (skill ratings) as the SG baseline
+        with console.status("[cyan]Fetching rolling SG history (skill ratings)…[/cyan]"):
             try:
-                if args.pre_tournament:
-                    predictions_raw = client.get_pre_tournament_predictions(tour=args.tour)
-                else:
-                    predictions_raw = client.get_in_play_predictions(tour=args.tour)
+                stats_raw = client.get_historical_sg_stats(tour=args.tour)
             except Exception as exc:
-                console.print(f"[yellow]Warning:[/yellow] Could not fetch predictions: {exc}")
+                console.print(f"[red]Failed to fetch SG history:[/red] {exc}")
+                sys.exit(1)
 
-    # --- Load market odds ---
-    market_odds = None
-    if args.odds_file:
-        try:
-            market_odds = load_market_odds(args.odds_file)
-            console.print(
-                f"[green]Loaded market odds for {len(market_odds)} players[/green]"
-            )
-        except Exception as exc:
-            console.print(f"[yellow]Warning:[/yellow] Could not load odds file: {exc}")
+        predictions_raw = None
+        if not args.no_predictions:
+            with console.status("[cyan]Fetching pre-tournament predictions…[/cyan]"):
+                try:
+                    predictions_raw = client.get_pre_tournament_predictions(tour=args.tour)
+                except Exception as exc:
+                    console.print(f"[yellow]Warning:[/yellow] Could not fetch predictions: {exc}")
 
-    # --- Build rankings ---
-    df = model.build(
-        live_raw,
-        predictions_raw,
-        pre_tournament=args.pre_tournament,
-        market_odds=market_odds,
-    )
+        # --- Load market odds ---
+        market_odds = None
+        if args.odds_file:
+            try:
+                market_odds = load_market_odds(args.odds_file)
+                console.print(
+                    f"[green]Loaded market odds for {len(market_odds)} players[/green]"
+                )
+            except Exception as exc:
+                console.print(f"[yellow]Warning:[/yellow] Could not load odds file: {exc}")
 
-    # --- Header ---
-    event_name = live_raw.get("event_name") or live_raw.get("event") or "Current Event"
-    last_updated = live_raw.get("last_updated", "")
-    round_label = f"Round {args.round}" if args.round != "event" else "Cumulative"
+        df = model.build_pre_tournament(stats_raw, predictions_raw, market_odds=market_odds)
+
+        event_name = "Pre-Tournament Rankings"
+        last_updated = stats_raw.get("last_updated", "")
+        round_label = "Rolling SG History"
+
+    else:
+        # Live/in-play: use live tournament stats
+        with console.status("[cyan]Fetching live tournament stats…[/cyan]"):
+            try:
+                stats_raw = client.get_live_tournament_stats(tour=args.tour, round=args.round)
+            except Exception as exc:
+                console.print(f"[red]Failed to fetch live stats:[/red] {exc}")
+                sys.exit(1)
+
+        predictions_raw = None
+        if not args.no_predictions:
+            with console.status("[cyan]Fetching in-play predictions…[/cyan]"):
+                try:
+                    predictions_raw = client.get_in_play_predictions(tour=args.tour)
+                except Exception as exc:
+                    console.print(f"[yellow]Warning:[/yellow] Could not fetch predictions: {exc}")
+
+        # --- Load market odds ---
+        market_odds = None
+        if args.odds_file:
+            try:
+                market_odds = load_market_odds(args.odds_file)
+                console.print(
+                    f"[green]Loaded market odds for {len(market_odds)} players[/green]"
+                )
+            except Exception as exc:
+                console.print(f"[yellow]Warning:[/yellow] Could not load odds file: {exc}")
+
+        df = model.build(stats_raw, predictions_raw, market_odds=market_odds)
+
+        event_name = stats_raw.get("event_name") or stats_raw.get("event") or "Current Event"
+        last_updated = stats_raw.get("last_updated", "")
+        round_label = f"Round {args.round}" if args.round != "event" else "Cumulative"
 
     console.print()
     console.print(

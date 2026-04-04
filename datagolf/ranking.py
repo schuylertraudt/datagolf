@@ -68,6 +68,33 @@ class RankingModel:
             rows.append(row)
         return pd.DataFrame(rows)
 
+    def _parse_skill_ratings(self, raw: dict) -> pd.DataFrame:
+        """
+        Parse the skill-ratings (or historical-raw-data/rounds) response into
+        a DataFrame with the same SG columns used by _parse_live_stats.
+
+        skill-ratings structure:
+          {"last_updated": "...", "players": [{dg_id, player_name, sg_ott, ...}]}
+
+        historical-raw-data/rounds structure (when available):
+          {"last_updated": "...", "data": [{dg_id, player_name, sg_ott, ...}]}
+        """
+        players = raw.get("players") or raw.get("data", [])
+        rows = []
+        for p in players:
+            row: dict = {
+                "player_name": p.get("player_name"),
+                "dg_id": p.get("dg_id"),
+                # No live position/thru in pre-tournament mode
+                "position": None,
+                "total": None,
+                "thru": None,
+            }
+            for stat in SG_STATS:
+                row[stat] = _to_float(p.get(stat))
+            rows.append(row)
+        return pd.DataFrame(rows)
+
     def _parse_predictions(self, raw: dict, pre_tournament: bool = False) -> pd.DataFrame:
         """
         Parse in-play or pre-tournament predictions JSON.
@@ -145,6 +172,58 @@ class RankingModel:
                 continue
             col = df[stat].copy()
             # Fill missing with column median so absent players aren't penalized
+            median = col.median()
+            col = col.fillna(median if pd.notna(median) else 0.0)
+            z = _zscore(col)
+            score += weight * z
+
+        df["composite_score"] = score
+        df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
+        df["rank"] = df.index + 1
+
+        if market_odds is not None:
+            df = self._add_edge(df, market_odds)
+
+        return df
+
+    def build_pre_tournament(
+        self,
+        skill_ratings_raw: dict,
+        predictions_raw: Optional[dict] = None,
+        market_odds: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """
+        Build a pre-tournament composite ranking using rolling SG history
+        (from skill-ratings or historical-raw-data) instead of live tournament stats.
+
+        Args:
+            skill_ratings_raw:  Response from get_skill_ratings() or
+                                get_historical_sg_stats(). Provides rolling SG baselines.
+            predictions_raw:    Response from get_pre_tournament_predictions(). Optional.
+            market_odds:        DataFrame with columns [player_name, market_win_prob].
+
+        Returns:
+            DataFrame sorted by composite_score descending, with a 'rank' column.
+        """
+        df = self._parse_skill_ratings(skill_ratings_raw)
+
+        if predictions_raw is not None:
+            df_pred = self._parse_predictions(predictions_raw, pre_tournament=True)
+            df = df.merge(
+                df_pred[["dg_id", "win_prob", "top5_prob", "top10_prob", "make_cut_prob"]],
+                on="dg_id",
+                how="left",
+            )
+        else:
+            for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
+                df[col] = np.nan
+
+        # Composite score: same weighted z-score approach as live rankings
+        score = pd.Series(0.0, index=df.index)
+        for stat, weight in self.weights.items():
+            if stat not in df.columns:
+                continue
+            col = df[stat].copy()
             median = col.median()
             col = col.fillna(median if pd.notna(median) else 0.0)
             z = _zscore(col)
