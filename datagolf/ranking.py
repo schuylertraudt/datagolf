@@ -238,12 +238,16 @@ class RankingModel:
                 c for c in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob")
                 if c in df_pred.columns
             ]
-            if len(pred_cols) > 1:  # at least one stat column besides dg_id
-                df = df.merge(df_pred[pred_cols], on="dg_id", how="left")
+            if len(pred_cols) > 1:
+                # Inner join: keeps only players who are in the tournament field
+                df = df.merge(df_pred[pred_cols], on="dg_id", how="inner")
             else:
+                # Predictions exist but have no useful columns — still filter to field
+                df = df[df["dg_id"].isin(df_pred["dg_id"])]
                 for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
                     df[col] = np.nan
         else:
+            # No predictions available — can't filter to field, show all with a warning
             for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
                 df[col] = np.nan
 
