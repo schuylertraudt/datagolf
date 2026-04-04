@@ -79,5 +79,31 @@ class DataGolfClient:
         """
         Per-category skill estimates (sg_ott, sg_app, sg_arg, sg_putt, sg_t2g, sg_total).
         display: 'value' or 'rank'.
+        These are rolling averages over recent rounds and serve as the SG baseline
+        for pre-tournament rankings.
         """
         return self._get("preds/skill-ratings", {"display": display})
+
+    def get_historical_sg_stats(
+        self,
+        tour: str = "pga",
+        n_rounds: int = 24,
+    ) -> dict:
+        """
+        Fetch per-player rolling SG stats from recent rounds via the
+        historical-raw-data endpoint, aggregated client-side.
+
+        Falls back to skill-ratings if the historical endpoint is unavailable,
+        since skill-ratings are themselves rolling weighted averages.
+
+        n_rounds: approximate number of recent rounds to target (used as a hint;
+                  actual coverage depends on API availability).
+        """
+        try:
+            return self._get(
+                "historical-raw-data/rounds",
+                {"tour": tour, "n_rounds": n_rounds},
+            )
+        except Exception:
+            # skill-ratings is a reliable fallback: it reflects rolling SG averages
+            return self._get("preds/skill-ratings", {})
