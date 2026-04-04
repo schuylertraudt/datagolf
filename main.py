@@ -37,6 +37,18 @@ from rich.table import Table
 from datagolf.client import DataGolfClient
 from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel, american_to_prob
 
+
+def prob_to_american(prob: float) -> str:
+    """Convert a win probability (0-1) to American odds string, e.g. '+350' or '-120'."""
+    if not prob or pd.isna(prob) or prob <= 0 or prob >= 1:
+        return "[dim]-[/dim]"
+    if prob >= 0.5:
+        odds = -(prob / (1 - prob)) * 100
+        return f"{int(round(odds))}"
+    else:
+        odds = ((1 - prob) / prob) * 100
+        return f"+{int(round(odds))}"
+
 console = Console()
 
 
@@ -285,6 +297,7 @@ def display_rankings(
     t.add_column("SG:PUT", justify="right", min_width=7)
     t.add_column("SG:TOT", justify="right", min_width=7)
     t.add_column("Win%",   justify="right", min_width=7)
+    t.add_column("DG Odds", justify="right", min_width=8)
     t.add_column("Score",  justify="right", min_width=7)
     if show_edge:
         t.add_column("Edge", justify="right", min_width=8)
@@ -300,6 +313,7 @@ def display_rankings(
             fmt(row.get("sg_putt"), signed=True),
             fmt(row.get("sg_total"), signed=True),
             fmt_pct(row.get("win_prob")),
+            prob_to_american(row.get("win_prob")),
             fmt(row.get("composite_score"), signed=True),
         ]
         if show_edge:
@@ -392,7 +406,13 @@ def main():
             long_term_weight=1.0 - history_cfg["short_weight"],
         )
 
-        event_name = "Pre-Tournament Rankings"
+        event_name = (
+            (predictions_raw or {}).get("event_name")
+            or (predictions_raw or {}).get("event")
+            or short_raw.get("event_name")
+            or short_raw.get("event")
+            or "Pre-Tournament Rankings"
+        )
         last_updated = short_raw.get("last_updated", "")
         sw = history_cfg["short_weight"]
         round_label = (
