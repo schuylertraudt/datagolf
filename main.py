@@ -196,10 +196,27 @@ def prompt_pre_tournament_config(args) -> tuple[dict, dict]:
 
     console.print()
 
+    console.print()
+
+    # --- Model odds blend ---
+    console.print("[bold]My odds blend[/bold]")
+    console.print(
+        "[dim]Blend DataGolf win probabilities with your composite score to derive custom odds.[/dim]"
+    )
+    raw_dg = FloatPrompt.ask(
+        "  DataGolf weight (0 = my model only, 1 = DataGolf only)",
+        default=0.5,
+        console=console,
+    )
+    dg_weight = max(0.0, min(1.0, raw_dg))
+
+    console.print()
+
     history_cfg = {
         "short_rounds": short_rounds,
         "long_rounds":  long_rounds,
         "short_weight": short_weight,
+        "dg_weight":    dg_weight,
     }
     return weights, history_cfg
 
@@ -296,9 +313,11 @@ def display_rankings(
     t.add_column("SG:ARG", justify="right", min_width=7)
     t.add_column("SG:PUT", justify="right", min_width=7)
     t.add_column("SG:TOT", justify="right", min_width=7)
-    t.add_column("Win%",   justify="right", min_width=7)
+    t.add_column("Win%",    justify="right", min_width=7)
     t.add_column("DG Odds", justify="right", min_width=8)
-    t.add_column("Score",  justify="right", min_width=7)
+    if "model_win_prob" in df.columns:
+        t.add_column("My Odds", justify="right", min_width=8)
+    t.add_column("Score",   justify="right", min_width=7)
     if show_edge:
         t.add_column("Edge", justify="right", min_width=8)
 
@@ -314,6 +333,10 @@ def display_rankings(
             fmt(row.get("sg_total"), signed=True),
             fmt_pct(row.get("win_prob")),
             prob_to_american(row.get("win_prob")),
+        ]
+        if "model_win_prob" in display_df.columns:
+            cells.append(prob_to_american(row.get("model_win_prob")))
+        cells += [
             fmt(row.get("composite_score"), signed=True),
         ]
         if show_edge:
@@ -346,7 +369,7 @@ def main():
         # Prompt for weights and history blend (unless --no-prompt)
         if args.no_prompt:
             weights = resolve_weights(args)
-            history_cfg = dict(DEFAULT_HISTORY)
+            history_cfg = {**DEFAULT_HISTORY, "dg_weight": 0.5}
         else:
             weights, history_cfg = prompt_pre_tournament_config(args)
 
@@ -405,6 +428,7 @@ def main():
             long_term_raw=long_raw,
             long_term_weight=1.0 - history_cfg["short_weight"],
         )
+        df = model.blend_win_probs(df, dg_weight=history_cfg["dg_weight"])
 
         event_name = (
             (predictions_raw or {}).get("event_name")
