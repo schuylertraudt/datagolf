@@ -80,9 +80,6 @@ class RankingModel:
           {"last_updated": "...", "data": [{dg_id, player_name, sg_ott, ...}]}
         """
         players = raw.get("players") or raw.get("data", [])
-        if players:
-            import sys
-            print(f"[debug] first player keys: {list(players[0].keys())}", file=sys.stderr)
         rows = []
         for p in players:
             name = (
@@ -238,12 +235,16 @@ class RankingModel:
                 c for c in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob")
                 if c in df_pred.columns
             ]
-            if len(pred_cols) > 1:
+            if len(pred_cols) > 1 and "dg_id" in df_pred.columns:
                 # Inner join: keeps only players who are in the tournament field
                 df = df.merge(df_pred[pred_cols], on="dg_id", how="inner")
-            else:
-                # Predictions exist but have no useful columns — still filter to field
+            elif "dg_id" in df_pred.columns:
+                # Predictions exist but have no useful stat columns — still filter to field
                 df = df[df["dg_id"].isin(df_pred["dg_id"])]
+                for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
+                    df[col] = np.nan
+            else:
+                # Predictions response had no usable structure — show all, no win probs
                 for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
                     df[col] = np.nan
         else:
