@@ -245,7 +245,13 @@ def fmt_pos(val) -> str:
     return str(val)
 
 
-def display_rankings(df: pd.DataFrame, top_n: int, show_edge: bool, sort_col: str):
+def display_rankings(
+    df: pd.DataFrame,
+    top_n: int,
+    show_edge: bool,
+    sort_col: str,
+    pre_tournament: bool = False,
+):
     # Re-sort if needed
     sort_map = {
         "composite": "composite_score",
@@ -266,28 +272,28 @@ def display_rankings(df: pd.DataFrame, top_n: int, show_edge: bool, sort_col: st
         show_header=True,
         header_style="bold",
         pad_edge=False,
-        min_width=80,
+        expand=False,
     )
     t.add_column("#", justify="right", width=4, style="dim")
-    t.add_column("Player", min_width=22)
-    t.add_column("Pos", justify="center", width=5)
-    t.add_column("Thru", justify="center", width=5)
-    t.add_column("SG:OTT", justify="right", width=7)
-    t.add_column("SG:APP", justify="right", width=7)
-    t.add_column("SG:ARG", justify="right", width=7)
-    t.add_column("SG:PUT", justify="right", width=7)
-    t.add_column("SG:TOT", justify="right", width=7)
-    t.add_column("Win%", justify="right", width=7)
-    t.add_column("Score", justify="right", width=7)
+    t.add_column("Player", min_width=24, no_wrap=True)
+    if not pre_tournament:
+        t.add_column("Pos",  justify="center", width=5)
+        t.add_column("Thru", justify="center", width=5)
+    t.add_column("SG:OTT", justify="right", min_width=7)
+    t.add_column("SG:APP", justify="right", min_width=7)
+    t.add_column("SG:ARG", justify="right", min_width=7)
+    t.add_column("SG:PUT", justify="right", min_width=7)
+    t.add_column("SG:TOT", justify="right", min_width=7)
+    t.add_column("Win%",   justify="right", min_width=7)
+    t.add_column("Score",  justify="right", min_width=7)
     if show_edge:
-        t.add_column("Edge", justify="right", width=8)
+        t.add_column("Edge", justify="right", min_width=8)
 
     for _, row in display_df.iterrows():
-        cells = [
-            str(int(row["rank"])),
-            str(row.get("player_name") or ""),
-            fmt_pos(row.get("position")),
-            fmt_pos(row.get("thru")),
+        cells = [str(int(row["rank"])), str(row.get("player_name") or "")]
+        if not pre_tournament:
+            cells += [fmt_pos(row.get("position")), fmt_pos(row.get("thru"))]
+        cells += [
             fmt(row.get("sg_ott"), signed=True),
             fmt(row.get("sg_app"), signed=True),
             fmt(row.get("sg_arg"), signed=True),
@@ -443,7 +449,12 @@ def main():
     console.print()
 
     top_n = 0 if args.all else args.top
-    display_rankings(df, top_n, show_edge=market_odds is not None, sort_col=args.sort)
+    display_rankings(
+        df, top_n,
+        show_edge=market_odds is not None,
+        sort_col=args.sort,
+        pre_tournament=args.pre_tournament,
+    )
 
     # --- Value summary ---
     if market_odds is not None and "edge" in df.columns:
