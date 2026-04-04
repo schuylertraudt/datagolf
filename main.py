@@ -30,6 +30,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from rich import box
 from rich.console import Console
+from rich.prompt import FloatPrompt
+from rich.rule import Rule
 from rich.table import Table
 
 from datagolf.client import DataGolfClient
@@ -58,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Use pre-tournament predictions (use before first round starts)")
     p.add_argument("--no-predictions", action="store_true",
                    help="Skip prediction fetching; rank by SG stats only")
+    p.add_argument("--no-prompt", action="store_true",
+                   help="Skip interactive weight/blend prompts; use defaults or --weight-* flags")
     p.add_argument("--odds-file",
                    help="Path to CSV with market odds. Required columns: player_name + one of "
                         "market_win_prob (decimal 0-1), market_odds_american, or market_odds_decimal")
@@ -98,6 +102,94 @@ def resolve_weights(args) -> dict:
         if v is not None:
             weights[k] = v
     return weights
+
+
+# ---------------------------------------------------------------------------
+# Pre-tournament interactive configuration
+# ---------------------------------------------------------------------------
+
+# Default history blend config
+DEFAULT_HISTORY = {"short_rounds": 12, "long_rounds": 36, "short_weight": 0.60}
+
+# Labels for each weight key used in prompts
+_WEIGHT_LABELS: dict[str, str] = {
+    "sg_total": "Overall SG total",
+    "win_prob": "DataGolf win probability",
+    "sg_app":   "SG: Approach",
+    "sg_putt":  "SG: Putting",
+    "sg_ott":   "SG: Off the tee",
+    "sg_arg":   "SG: Around the green",
+    "sg_t2g":   "SG: Tee to green",
+}
+
+
+def prompt_pre_tournament_config(args) -> tuple[dict, dict]:
+    """
+    Interactively prompt for SG weights and short/long-term history blend.
+    If a weight was already set via a --weight-* CLI flag it is shown but not re-asked.
+
+    Returns:
+        weights      — dict of raw (un-normalized) weights
+        history_cfg  — dict with short_rounds, long_rounds, short_weight
+    """
+    console.print()
+    console.print(Rule("[bold]Pre-tournament configuration[/bold]"))
+    console.print()
+
+    # --- SG weights ---
+    console.print("[bold]SG component weights[/bold] [dim](normalized to sum to 1)[/dim]")
+
+    cli_overrides = {
+        "sg_total": args.weight_sg_total,
+        "win_prob": args.weight_win_prob,
+        "sg_app":   args.weight_sg_app,
+        "sg_putt":  args.weight_sg_putt,
+        "sg_ott":   args.weight_sg_ott,
+        "sg_arg":   args.weight_sg_arg,
+        "sg_t2g":   args.weight_sg_t2g,
+    }
+
+    weights = {}
+    for key, default in DEFAULT_WEIGHTS.items():
+        label = _WEIGHT_LABELS.get(key, key)
+        cli_val = cli_overrides.get(key)
+        if cli_val is not None:
+            console.print(
+                f"  {label:<30} [dim]{cli_val:.2f}  (from --weight-{key.replace('_', '-')})[/dim]"
+            )
+            weights[key] = cli_val
+        else:
+            val = FloatPrompt.ask(f"  {label:<30}", default=default, console=console)
+            weights[key] = val
+
+    console.print()
+
+    # --- History blend ---
+    console.print("[bold]Historical SG blend[/bold]")
+    console.print(
+        "[dim]Short-term captures recent form; long-term captures sustained skill.[/dim]"
+    )
+    short_rounds = int(
+        FloatPrompt.ask("  Short-term window (recent rounds) ", default=DEFAULT_HISTORY["short_rounds"], console=console)
+    )
+    long_rounds = int(
+        FloatPrompt.ask("  Long-term window  (recent rounds) ", default=DEFAULT_HISTORY["long_rounds"], console=console)
+    )
+    raw_sw = FloatPrompt.ask(
+        "  Short-term weight (0 = all long-term, 1 = all short-term)",
+        default=DEFAULT_HISTORY["short_weight"],
+        console=console,
+    )
+    short_weight = max(0.0, min(1.0, raw_sw))
+
+    console.print()
+
+    history_cfg = {
+        "short_rounds": short_rounds,
+        "long_rounds":  long_rounds,
+        "short_weight": short_weight,
+    }
+    return weights, history_cfg
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +320,44 @@ def main():
         sys.exit(1)
 
     client = DataGolfClient(api_key)
-    model = RankingModel(resolve_weights(args))
 
     # --- Fetch stats and predictions ---
     if args.pre_tournament:
-        # Pre-tournament: use rolling SG history (skill ratings) as the SG baseline
-        with console.status("[cyan]Fetching rolling SG history (skill ratings)…[/cyan]"):
+        # Prompt for weights and history blend (unless --no-prompt)
+        if args.no_prompt:
+            weights = resolve_weights(args)
+            history_cfg = dict(DEFAULT_HISTORY)
+        else:
+            weights, history_cfg = prompt_pre_tournament_config(args)
+
+        model = RankingModel(weights)
+
+        # Fetch short-term and long-term SG history in parallel would be ideal;
+        # for simplicity we fetch sequentially.
+        with console.status(
+            f"[cyan]Fetching short-term SG history ({history_cfg['short_rounds']} rounds)…[/cyan]"
+        ):
             try:
-                stats_raw = client.get_historical_sg_stats(tour=args.tour)
+                short_raw = client.get_historical_sg_stats(
+                    tour=args.tour, n_rounds=history_cfg["short_rounds"]
+                )
             except Exception as exc:
-                console.print(f"[red]Failed to fetch SG history:[/red] {exc}")
+                console.print(f"[red]Failed to fetch short-term SG history:[/red] {exc}")
                 sys.exit(1)
+
+        with console.status(
+            f"[cyan]Fetching long-term SG history ({history_cfg['long_rounds']} rounds)…[/cyan]"
+        ):
+            try:
+                long_raw = client.get_historical_sg_stats(
+                    tour=args.tour, n_rounds=history_cfg["long_rounds"]
+                )
+            except Exception as exc:
+                console.print(
+                    f"[yellow]Warning:[/yellow] Could not fetch long-term SG history: {exc}. "
+                    "Using short-term only."
+                )
+                long_raw = short_raw
 
         predictions_raw = None
         if not args.no_predictions:
@@ -259,13 +378,25 @@ def main():
             except Exception as exc:
                 console.print(f"[yellow]Warning:[/yellow] Could not load odds file: {exc}")
 
-        df = model.build_pre_tournament(stats_raw, predictions_raw, market_odds=market_odds)
+        df = model.build_pre_tournament(
+            short_raw,
+            predictions_raw,
+            market_odds=market_odds,
+            long_term_raw=long_raw,
+            long_term_weight=1.0 - history_cfg["short_weight"],
+        )
 
         event_name = "Pre-Tournament Rankings"
-        last_updated = stats_raw.get("last_updated", "")
-        round_label = "Rolling SG History"
+        last_updated = short_raw.get("last_updated", "")
+        sw = history_cfg["short_weight"]
+        round_label = (
+            f"SG blend: {sw:.0%} last {history_cfg['short_rounds']}r / "
+            f"{1-sw:.0%} last {history_cfg['long_rounds']}r"
+        )
 
     else:
+        model = RankingModel(resolve_weights(args))
+
         # Live/in-play: use live tournament stats
         with console.status("[cyan]Fetching live tournament stats…[/cyan]"):
             try:

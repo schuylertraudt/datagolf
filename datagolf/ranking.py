@@ -188,24 +188,37 @@ class RankingModel:
 
     def build_pre_tournament(
         self,
-        skill_ratings_raw: dict,
+        short_term_raw: dict,
         predictions_raw: Optional[dict] = None,
         market_odds: Optional[pd.DataFrame] = None,
+        long_term_raw: Optional[dict] = None,
+        long_term_weight: float = 0.40,
     ) -> pd.DataFrame:
         """
-        Build a pre-tournament composite ranking using rolling SG history
-        (from skill-ratings or historical-raw-data) instead of live tournament stats.
+        Build a pre-tournament composite ranking using a blend of short-term
+        and long-term rolling SG history.
 
         Args:
-            skill_ratings_raw:  Response from get_skill_ratings() or
-                                get_historical_sg_stats(). Provides rolling SG baselines.
-            predictions_raw:    Response from get_pre_tournament_predictions(). Optional.
-            market_odds:        DataFrame with columns [player_name, market_win_prob].
+            short_term_raw:   Response from get_historical_sg_stats() with a smaller
+                              n_rounds (e.g. 12) — captures recent form.
+            predictions_raw:  Response from get_pre_tournament_predictions(). Optional.
+            market_odds:      DataFrame with columns [player_name, market_win_prob].
+            long_term_raw:    Response from get_historical_sg_stats() with a larger
+                              n_rounds (e.g. 36) — captures sustained skill. When None,
+                              short_term_raw is used for both (i.e. no blending).
+            long_term_weight: Weight given to long-term stats (0–1). Short-term weight
+                              is 1 − long_term_weight.
 
         Returns:
             DataFrame sorted by composite_score descending, with a 'rank' column.
         """
-        df = self._parse_skill_ratings(skill_ratings_raw)
+        short_df = self._parse_skill_ratings(short_term_raw)
+
+        if long_term_raw is not None and long_term_weight > 0:
+            long_df = self._parse_skill_ratings(long_term_raw)
+            df = self._blend_sg_stats(short_df, long_df, long_term_weight)
+        else:
+            df = short_df
 
         if predictions_raw is not None:
             df_pred = self._parse_predictions(predictions_raw, pre_tournament=True)
@@ -237,6 +250,43 @@ class RankingModel:
             df = self._add_edge(df, market_odds)
 
         return df
+
+    def _blend_sg_stats(
+        self,
+        short_df: pd.DataFrame,
+        long_df: pd.DataFrame,
+        long_weight: float,
+    ) -> pd.DataFrame:
+        """
+        Merge two skill-ratings DataFrames and produce a weighted average of each
+        SG stat per player. Players present in only one set use that set's values.
+
+        long_weight: 0–1. short_weight = 1 − long_weight.
+        """
+        short_weight = 1.0 - long_weight
+        merged = short_df.merge(long_df, on="dg_id", how="outer", suffixes=("_s", "_l"))
+        merged["player_name"] = merged["player_name_s"].fillna(merged["player_name_l"])
+
+        for stat in SG_STATS:
+            s_col, l_col = f"{stat}_s", f"{stat}_l"
+            has_s = s_col in merged.columns
+            has_l = l_col in merged.columns
+            if has_s and has_l:
+                # When a player is missing from one source, fall back to the other
+                s_vals = merged[s_col].fillna(merged[l_col])
+                l_vals = merged[l_col].fillna(merged[s_col])
+                merged[stat] = short_weight * s_vals + long_weight * l_vals
+            elif has_s:
+                merged[stat] = merged[s_col]
+            elif has_l:
+                merged[stat] = merged[l_col]
+
+        base_cols = ["player_name", "dg_id", "position", "total", "thru"]
+        for col in ("position", "total", "thru"):
+            if col not in merged.columns:
+                merged[col] = None
+        stat_cols = [s for s in SG_STATS if s in merged.columns]
+        return merged[base_cols + stat_cols].copy()
 
     def _add_edge(self, df: pd.DataFrame, market_odds: pd.DataFrame) -> pd.DataFrame:
         """
