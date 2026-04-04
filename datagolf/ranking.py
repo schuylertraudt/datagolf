@@ -156,8 +156,12 @@ class RankingModel:
 
         if predictions_raw is not None:
             df_pred = self._parse_predictions(predictions_raw, pre_tournament)
+            pred_cols = ["dg_id"] + [
+                c for c in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob")
+                if c in df_pred.columns
+            ]
             df = df.merge(
-                df_pred[["dg_id", "win_prob", "top5_prob", "top10_prob", "make_cut_prob"]],
+                df_pred[pred_cols],
                 on="dg_id",
                 how="left",
             )
@@ -222,11 +226,15 @@ class RankingModel:
 
         if predictions_raw is not None:
             df_pred = self._parse_predictions(predictions_raw, pre_tournament=True)
-            df = df.merge(
-                df_pred[["dg_id", "win_prob", "top5_prob", "top10_prob", "make_cut_prob"]],
-                on="dg_id",
-                how="left",
-            )
+            pred_cols = ["dg_id"] + [
+                c for c in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob")
+                if c in df_pred.columns
+            ]
+            if len(pred_cols) > 1:  # at least one stat column besides dg_id
+                df = df.merge(df_pred[pred_cols], on="dg_id", how="left")
+            else:
+                for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
+                    df[col] = np.nan
         else:
             for col in ("win_prob", "top5_prob", "top10_prob", "make_cut_prob"):
                 df[col] = np.nan
