@@ -80,12 +80,20 @@ class RankingModel:
           {"last_updated": "...", "data": [{dg_id, player_name, sg_ott, ...}]}
         """
         players = raw.get("players") or raw.get("data", [])
+        if players:
+            import sys
+            print(f"[debug] first player keys: {list(players[0].keys())}", file=sys.stderr)
         rows = []
         for p in players:
+            name = (
+                p.get("player_name")
+                or p.get("player")
+                or p.get("name")
+                or p.get("full_name")
+            )
             row: dict = {
-                "player_name": p.get("player_name"),
+                "player_name": name,
                 "dg_id": p.get("dg_id"),
-                # No live position/thru in pre-tournament mode
                 "position": None,
                 "total": None,
                 "thru": None,
