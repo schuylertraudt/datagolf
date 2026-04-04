@@ -58,25 +58,21 @@ def bradley_terry(p1_win_prob: float, p2_win_prob: float) -> tuple[float, float]
 
 
 def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """
-    Parse the DataGolf betting-tools/matchups response and compute edges.
-
-    For each matchup and each book present in the response:
-      - Market implied probs (vig-removed) from the book's lines
-      - DataGolf's own matchup probability
-      - Our model's matchup probability (Bradley-Terry on model_win_prob)
-      - Edge = our_prob - market_fair_prob
-
-    Args:
-        raw:        Response from client.get_matchups().
-        model_df:   Rankings DataFrame with 'player_name' and 'model_win_prob'
-                    columns. If None, only DG probs and market probs are shown.
-
-    Returns:
-        DataFrame with one row per matchup per book, sorted by |model_edge| desc.
-    """
+    import sys
+    print(f"[debug] matchups top-level keys: {list(raw.keys())}", file=sys.stderr)
     matchups = raw.get("matchups", [])
     if not matchups:
+        # Try other common top-level keys
+        for key in ("data", "round_matchups", "matchup_list", "results"):
+            if raw.get(key):
+                matchups = raw[key]
+                print(f"[debug] found matchups under key '{key}', count={len(matchups)}", file=sys.stderr)
+                break
+    if matchups:
+        print(f"[debug] first matchup keys: {list(matchups[0].keys())}", file=sys.stderr)
+        print(f"[debug] first matchup sample: {matchups[0]}", file=sys.stderr)
+    else:
+        print(f"[debug] no matchup list found in response", file=sys.stderr)
         return pd.DataFrame()
 
     # Build model lookup: player_name -> model_win_prob
