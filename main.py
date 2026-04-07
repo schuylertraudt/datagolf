@@ -36,7 +36,53 @@ from rich.table import Table
 
 from datagolf.client import DataGolfClient
 from datagolf.matchups import parse_matchups, prob_to_american as mu_prob_to_american
+from datagolf.pgatour import PGATourStats
 from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel, american_to_prob
+
+WEEKLY_STATS_FILE = "weekly_stats.json"
+
+
+def load_weekly_stats() -> list[dict]:
+    """Load weekly PGA Tour stat config. Returns empty list if file not found."""
+    import json as _json
+    if not os.path.exists(WEEKLY_STATS_FILE):
+        return []
+    with open(WEEKLY_STATS_FILE) as f:
+        cfg = _json.load(f)
+    return cfg.get("stats", []), cfg.get("season_blend", {}).get("current_weight", 0.6)
+
+
+def fetch_weekly_stats(stat_configs) -> dict[str, pd.DataFrame]:
+    """
+    Fetch each configured PGA Tour stat. Returns dict of label -> combined DataFrame.
+    Silently skips any stat that fails to load.
+    """
+    if not stat_configs:
+        return {}
+    client = PGATourStats()
+    results = {}
+    for s in stat_configs:
+        try:
+            df = client.get_combined_stat(s["id"], label=s.get("label"))
+            results[s.get("label", s["id"])] = df
+        except Exception as exc:
+            console.print(f"[yellow]Warning:[/yellow] Could not fetch PGA Tour stat {s.get('label', s['id'])}: {exc}")
+    return results
+
+
+def merge_weekly_stats(rankings_df: pd.DataFrame, stat_dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """
+    Left-join each weekly stat's combined_rank onto the rankings DataFrame.
+    Adds one column per stat named '<label> Rk'.
+    """
+    df = rankings_df.copy()
+    for label, stat_df in stat_dfs.items():
+        col = f"{label} Rk"
+        lookup = stat_df.set_index("player_name")["combined_rank"]
+        # Normalize rankings player names to match PGA Tour format
+        df[col] = df["player_name"].str.strip().str.lower().map(lookup)
+        df[col] = df[col].apply(lambda x: int(x) if pd.notna(x) else None)
+    return df
 
 
 def prob_to_american(prob: float) -> str:
@@ -330,6 +376,10 @@ def display_rankings(
     t.add_column("Score",   justify="right", min_width=7)
     if show_edge:
         t.add_column("Edge", justify="right", min_width=8)
+    # Extra PGA Tour stat rank columns (display-only)
+    extra_cols = [c for c in df.columns if c.endswith(" Rk")]
+    for col in extra_cols:
+        t.add_column(col, justify="right", min_width=6)
 
     for _, row in display_df.iterrows():
         cells = [str(int(row["rank"])), str(row.get("player_name") or "")]
@@ -351,6 +401,9 @@ def display_rankings(
         ]
         if show_edge:
             cells.append(fmt_pct(row.get("edge"), signed=True))
+        for col in extra_cols:
+            v = row.get(col)
+            cells.append(str(int(v)) if v is not None else "[dim]-[/dim]")
         t.add_row(*cells)
 
     console.print(t)
@@ -507,6 +560,18 @@ def main():
         + "  ".join(f"{k}={v:.0%}" for k, v in model.weights.items())
     )
     console.print()
+
+    # --- Weekly PGA Tour stats ---
+    stat_configs = []
+    season_weight = 0.6
+    weekly = load_weekly_stats()
+    if weekly:
+        stat_configs, season_weight = weekly
+    if stat_configs:
+        with console.status("[cyan]Fetching PGA Tour weekly stats…[/cyan]"):
+            stat_dfs = fetch_weekly_stats(stat_configs)
+        if stat_dfs:
+            df = merge_weekly_stats(df, stat_dfs)
 
     top_n = 0 if args.all else args.top
     display_rankings(
