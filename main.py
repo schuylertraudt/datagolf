@@ -318,15 +318,15 @@ def display_rankings(
     if not pre_tournament:
         t.add_column("Pos",  justify="center", width=5)
         t.add_column("Thru", justify="center", width=5)
+    t.add_column("Win%",    justify="right", min_width=7)
+    t.add_column("DG Odds", justify="right", min_width=8)
+    if "model_win_prob" in df.columns:
+        t.add_column("My Odds", justify="right", min_width=8)
     t.add_column("SG:OTT", justify="right", min_width=7)
     t.add_column("SG:APP", justify="right", min_width=7)
     t.add_column("SG:ARG", justify="right", min_width=7)
     t.add_column("SG:PUT", justify="right", min_width=7)
     t.add_column("SG:TOT", justify="right", min_width=7)
-    t.add_column("Win%",    justify="right", min_width=7)
-    t.add_column("DG Odds", justify="right", min_width=8)
-    if "model_win_prob" in df.columns:
-        t.add_column("My Odds", justify="right", min_width=8)
     t.add_column("Score",   justify="right", min_width=7)
     if show_edge:
         t.add_column("Edge", justify="right", min_width=8)
@@ -336,17 +336,17 @@ def display_rankings(
         if not pre_tournament:
             cells += [fmt_pos(row.get("position")), fmt_pos(row.get("thru"))]
         cells += [
-            fmt(row.get("sg_ott"), signed=True),
-            fmt(row.get("sg_app"), signed=True),
-            fmt(row.get("sg_arg"), signed=True),
-            fmt(row.get("sg_putt"), signed=True),
-            fmt(row.get("sg_total"), signed=True),
             fmt_pct(row.get("win_prob")),
             prob_to_american(row.get("win_prob")),
         ]
         if "model_win_prob" in display_df.columns:
             cells.append(prob_to_american(row.get("model_win_prob")))
         cells += [
+            fmt(row.get("sg_ott"), signed=True),
+            fmt(row.get("sg_app"), signed=True),
+            fmt(row.get("sg_arg"), signed=True),
+            fmt(row.get("sg_putt"), signed=True),
+            fmt(row.get("sg_total"), signed=True),
             fmt(row.get("composite_score"), signed=True),
         ]
         if show_edge:

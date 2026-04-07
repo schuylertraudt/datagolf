@@ -179,14 +179,14 @@ def _rankings_to_html(df) -> str:
         <tr>
           <td class="dim">{int(r['rank'])}</td>
           <td class="name">{r.get('player_name') or ''}</td>
+          <td>{_pct(r.get('win_prob'))}</td>
+          <td>{_american(r.get('win_prob'))}</td>
+          <td>{_american(r.get('model_win_prob'))}</td>
           <td>{_num(r.get('sg_ott'), signed=True)}</td>
           <td>{_num(r.get('sg_app'), signed=True)}</td>
           <td>{_num(r.get('sg_arg'), signed=True)}</td>
           <td>{_num(r.get('sg_putt'), signed=True)}</td>
           <td>{_num(r.get('sg_total'), signed=True)}</td>
-          <td>{_pct(r.get('win_prob'))}</td>
-          <td>{_american(r.get('win_prob'))}</td>
-          <td>{_american(r.get('model_win_prob'))}</td>
           <td>{_num(r.get('composite_score'), signed=True)}</td>
         </tr>""")
     return "\n".join(rows)
@@ -318,8 +318,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <table>
     <thead><tr>
       <th>#</th><th>Player</th>
+      <th>Win%</th><th>DG Odds</th><th>My Odds</th>
       <th>SG:OTT</th><th>SG:APP</th><th>SG:ARG</th><th>SG:PUT</th><th>SG:TOT</th>
-      <th>Win%</th><th>DG Odds</th><th>My Odds</th><th>Score</th>
+      <th>Score</th>
     </tr></thead>
     <tbody>{{ rankings_html | safe }}</tbody>
   </table>
