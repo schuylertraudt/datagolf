@@ -48,6 +48,19 @@ query StatDetails($tourCode: TourCode!, $statId: String!, $season: Int) {
 """
 
 
+_CATEGORIES_QUERY = """
+query StatCategories($tourCode: TourCode!) {
+  statCategories(tourCode: $tourCode) {
+    displayName
+    stats {
+      statId
+      statTitle
+    }
+  }
+}
+"""
+
+
 class PGATourStats:
     def __init__(self, timeout: int = 20):
         self.session = requests.Session()
@@ -58,6 +71,36 @@ class PGATourStats:
         })
         self.timeout = timeout
         self._current_year = datetime.utcnow().year
+
+    def get_stat_categories(self) -> list[dict]:
+        """
+        Fetch the full stat catalog grouped by category.
+        Returns list of {"category": str, "stats": [{"id": str, "title": str}]}.
+        Returns an empty list if the endpoint doesn't support the query.
+        """
+        payload = {
+            "query": _CATEGORIES_QUERY,
+            "variables": {"tourCode": "R"},
+        }
+        try:
+            resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            raw = data.get("data", {}).get("statCategories") or []
+            return [
+                {
+                    "category": cat.get("displayName", "Other"),
+                    "stats": [
+                        {"id": s["statId"], "title": s["statTitle"]}
+                        for s in (cat.get("stats") or [])
+                        if s.get("statId") and s.get("statTitle")
+                    ],
+                }
+                for cat in raw
+                if cat.get("stats")
+            ]
+        except Exception:
+            return []
 
     def _fetch_stat(self, stat_id: str, season: int) -> list:
         """Fetch raw stat entries for one stat + season. Returns list of player dicts."""

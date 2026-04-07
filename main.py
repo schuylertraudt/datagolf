@@ -85,6 +85,95 @@ def merge_weekly_stats(rankings_df: pd.DataFrame, stat_dfs: dict[str, pd.DataFra
     return df
 
 
+def run_setup_stats():
+    """
+    Interactive prompt to pick 5 PGA Tour stats for the week and save to weekly_stats.json.
+    Fetches the stat catalog from the PGA Tour API; falls back to manual ID entry if unavailable.
+    """
+    import json as _json
+    from rich.prompt import Prompt
+    from rich.rule import Rule
+
+    console.print()
+    console.print(Rule("[bold]Weekly stats setup[/bold]"))
+    console.print()
+    console.print("[cyan]Fetching PGA Tour stat catalog…[/cyan]")
+
+    pga = PGATourStats()
+    categories = pga.get_stat_categories()
+
+    selected = []
+
+    if categories:
+        # Build a flat numbered list across all categories
+        all_stats = []
+        for cat in categories:
+            for s in cat["stats"]:
+                all_stats.append((cat["category"], s["id"], s["title"]))
+
+        # Print grouped
+        idx = 1
+        idx_map = {}
+        for cat in categories:
+            console.print(f"\n[bold]{cat['category']}[/bold]")
+            for s in cat["stats"]:
+                console.print(f"  [dim]{idx:>4}[/dim]  {s['title']:<45} [dim]{s['id']}[/dim]")
+                idx_map[idx] = {"id": s["id"], "label": s["title"]}
+                idx += 1
+
+        console.print()
+        console.print("[dim]Enter 5 stat numbers from the list above (or type a stat ID directly).[/dim]")
+        console.print()
+
+        for i in range(1, 6):
+            while True:
+                raw = Prompt.ask(f"  Stat {i}", console=console).strip()
+                # Allow entry by number or raw ID
+                if raw.isdigit() and int(raw) in idx_map:
+                    chosen = idx_map[int(raw)]
+                    label = Prompt.ask(
+                        f"    Label for '{chosen['label']}'",
+                        default=chosen["label"],
+                        console=console,
+                    )
+                    selected.append({"id": chosen["id"], "label": label})
+                    break
+                elif raw:
+                    # Treat as raw stat ID
+                    label = Prompt.ask(f"    Label for stat {raw}", default=raw, console=console)
+                    selected.append({"id": raw, "label": label})
+                    break
+                else:
+                    console.print("  [red]Please enter a number or stat ID.[/red]")
+    else:
+        # Fallback: manual ID entry
+        console.print("[yellow]Could not fetch stat catalog — enter stat IDs manually.[/yellow]")
+        console.print("[dim]Find IDs at pgatour.com/stats/detail/<ID>[/dim]")
+        console.print()
+        from rich.prompt import Prompt
+        for i in range(1, 6):
+            stat_id = Prompt.ask(f"  Stat {i} ID", console=console).strip()
+            label   = Prompt.ask(f"  Stat {i} label", default=stat_id, console=console)
+            selected.append({"id": stat_id, "label": label})
+
+    console.print()
+    raw_w = FloatPrompt.ask(
+        "Season blend — current season weight (0–1, rest = previous season)",
+        default=0.6,
+        console=console,
+    )
+    season_weight = max(0.0, min(1.0, raw_w))
+
+    cfg = {"season_blend": {"current_weight": season_weight}, "stats": selected}
+    with open(WEEKLY_STATS_FILE, "w") as f:
+        _json.dump(cfg, f, indent=2)
+
+    console.print()
+    console.print(f"[green]Saved {len(selected)} stats to {WEEKLY_STATS_FILE}[/green]")
+    for s in selected:
+        console.print(f"  {s['label']:<30} [dim]{s['id']}[/dim]")
+
+
 def prob_to_american(prob: float) -> str:
     """Convert a win probability (0-1) to American odds string, e.g. '+350' or '-120'."""
     if not prob or pd.isna(prob) or prob <= 0 or prob >= 1:
@@ -123,6 +212,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip interactive weight/blend prompts; use defaults or --weight-* flags")
     p.add_argument("--save-settings", action="store_true",
                    help="Save weights and blend config to settings.json after prompts (used by server.py)")
+    p.add_argument("--setup-stats", action="store_true",
+                   help="Interactively pick this week's 5 PGA Tour stats and save to weekly_stats.json")
     p.add_argument("--matchups", action="store_true",
                    help="Fetch DK/FD matchup lines and show edges vs your model odds")
     p.add_argument("--matchups-market", default="round_matchups",
@@ -415,6 +506,10 @@ def display_rankings(
 
 def main():
     args = build_parser().parse_args()
+
+    if args.setup_stats:
+        run_setup_stats()
+        return
 
     load_dotenv()
     api_key = os.getenv("DATAGOLF_API_KEY")
