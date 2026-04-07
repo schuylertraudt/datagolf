@@ -42,14 +42,17 @@ from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel, american_to_prob
 WEEKLY_STATS_FILE = "weekly_stats.json"
 
 
-def load_weekly_stats() -> list[dict]:
-    """Load weekly PGA Tour stat config. Returns empty list if file not found."""
+def load_weekly_stats():
+    """Load weekly PGA Tour stat config. Returns (stats, season_weight)."""
+    from datagolf.pgatour import auto_season_weight
+    auto_w, _ = auto_season_weight()
     import json as _json
     if not os.path.exists(WEEKLY_STATS_FILE):
-        return []
+        return [], auto_w
     with open(WEEKLY_STATS_FILE) as f:
         cfg = _json.load(f)
-    return cfg.get("stats", []), cfg.get("season_blend", {}).get("current_weight", 0.6)
+    weight = cfg.get("season_blend", {}).get("current_weight") or auto_w
+    return cfg.get("stats", []), weight
 
 
 def fetch_weekly_stats(stat_configs) -> dict[str, pd.DataFrame]:
@@ -157,9 +160,13 @@ def run_setup_stats():
             selected.append({"id": stat_id, "label": label})
 
     console.print()
+    from datagolf.pgatour import auto_season_weight
+    auto_w, auto_desc = auto_season_weight()
+    console.print("[bold]Season blend[/bold]")
+    console.print(f"  [dim]Auto-calculated: {auto_desc}[/dim]")
     raw_w = FloatPrompt.ask(
-        "Season blend — current season weight (0–1, rest = previous season)",
-        default=0.6,
+        "  Current season weight (0 = all previous, 1 = all current)",
+        default=auto_w,
         console=console,
     )
     season_weight = max(0.0, min(1.0, raw_w))

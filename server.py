@@ -32,11 +32,15 @@ WEEKLY_STATS_FILE = "weekly_stats.json"
 
 
 def _load_weekly_stats():
+    from datagolf.pgatour import auto_season_weight
+    auto_w, _ = auto_season_weight()
     if not os.path.exists(WEEKLY_STATS_FILE):
-        return [], 0.6
+        return [], auto_w
     with open(WEEKLY_STATS_FILE) as f:
         cfg = json.load(f)
-    return cfg.get("stats", []), cfg.get("season_blend", {}).get("current_weight", 0.6)
+    # If weight not explicitly set, use auto-calculated value
+    weight = cfg.get("season_blend", {}).get("current_weight") or auto_w
+    return cfg.get("stats", []), weight
 
 # ---------------------------------------------------------------------------
 # Config
