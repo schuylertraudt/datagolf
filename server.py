@@ -25,7 +25,18 @@ from flask import Flask, jsonify, render_template_string
 
 from datagolf.client import DataGolfClient
 from datagolf.matchups import parse_matchups
+from datagolf.pgatour import PGATourStats
 from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel
+
+WEEKLY_STATS_FILE = "weekly_stats.json"
+
+
+def _load_weekly_stats():
+    if not os.path.exists(WEEKLY_STATS_FILE):
+        return [], 0.6
+    with open(WEEKLY_STATS_FILE) as f:
+        cfg = json.load(f)
+    return cfg.get("stats", []), cfg.get("season_blend", {}).get("current_weight", 0.6)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -106,6 +117,22 @@ def _fetch(settings: dict) -> dict:
     )
     df = model.blend_win_probs(df, dg_weight=history.get("dg_weight", 0.5))
 
+    # Weekly PGA Tour stats
+    stat_configs, season_weight = _load_weekly_stats()
+    extra_cols = []
+    if stat_configs:
+        pga = PGATourStats()
+        for s in stat_configs:
+            try:
+                stat_df = pga.get_combined_stat(s["id"], label=s.get("label"), current_weight=season_weight)
+                col = f"{s.get('label', s['id'])} Rk"
+                lookup = stat_df.set_index("player_name")["combined_rank"]
+                df[col] = df["player_name"].str.strip().str.lower().map(lookup)
+                df[col] = df[col].apply(lambda x: int(x) if not __import__("pandas").isna(x) else None)
+                extra_cols.append(col)
+            except Exception:
+                pass
+
     # Matchups
     matchups_html = ""
     try:
@@ -124,7 +151,8 @@ def _fetch(settings: dict) -> dict:
 
     return {
         "event_name": event_name,
-        "rankings_html": _rankings_to_html(df),
+        "rankings_html": _rankings_to_html(df, extra_cols),
+        "extra_col_headers": extra_cols,
         "matchups_html": matchups_html,
         "weights": weights,
         "history": history,
@@ -172,9 +200,15 @@ def _american(prob):
         return "-"
 
 
-def _rankings_to_html(df) -> str:
+def _rankings_to_html(df, extra_cols=None) -> str:
+    extra_cols = extra_cols or []
     rows = []
     for _, r in df.head(50).iterrows():
+        extra_cells = ""
+        for col in extra_cols:
+            v = r.get(col)
+            cell_val = "<span class='dim'>-</span>" if v is None else str(int(v))
+            extra_cells += f"<td>{cell_val}</td>"
         rows.append(f"""
         <tr>
           <td class="dim">{int(r['rank'])}</td>
@@ -188,6 +222,7 @@ def _rankings_to_html(df) -> str:
           <td>{_num(r.get('sg_putt'), signed=True)}</td>
           <td>{_num(r.get('sg_total'), signed=True)}</td>
           <td>{_num(r.get('composite_score'), signed=True)}</td>
+          {extra_cells}
         </tr>""")
     return "\n".join(rows)
 
@@ -321,6 +356,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <th>Win%</th><th>DG Odds</th><th>My Odds</th>
       <th>SG:OTT</th><th>SG:APP</th><th>SG:ARG</th><th>SG:PUT</th><th>SG:TOT</th>
       <th>Score</th>
+      {% for col in extra_col_headers %}<th>{{ col }}</th>{% endfor %}
     </tr></thead>
     <tbody>{{ rankings_html | safe }}</tbody>
   </table>
@@ -349,6 +385,7 @@ def index():
         rankings_html=data.get("rankings_html", ""),
         matchups_html=data.get("matchups_html", ""),
         weights_str=weights_str,
+        extra_col_headers=data.get("extra_col_headers", []),
     )
 
 

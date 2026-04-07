@@ -1,0 +1,29 @@
+{
+  "_comment": "Copy this to weekly_stats.json and update each week. Stat IDs come from pgatour.com/stats/detail/<ID>",
+  "season_blend": {
+    "current_weight": 0.6,
+    "_note": "0.6 = 60% current season, 40% previous season"
+  },
+  "stats": [
+    {
+      "id": "02564",
+      "label": "SG: T2G"
+    },
+    {
+      "id": "02567",
+      "label": "Prox 100-125y"
+    },
+    {
+      "id": "02330",
+      "label": "Driving Dist"
+    },
+    {
+      "id": "02568",
+      "label": "Prox 50-125y"
+    },
+    {
+      "id": "101",
+      "label": "GIR %"
+    }
+  ]
+}
