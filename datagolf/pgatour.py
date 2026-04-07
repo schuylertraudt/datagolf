@@ -114,6 +114,60 @@ query StatCategories($tourCode: TourCode!) {
 """
 
 
+# Curated fallback stat catalog — used when the API doesn't return categories.
+# IDs sourced from pgatour.com/stats/detail/<ID> URLs.
+CURATED_STATS = [
+    {"category": "Strokes Gained", "stats": [
+        {"id": "02675", "title": "SG: Total"},
+        {"id": "02674", "title": "SG: Putting"},
+        {"id": "02568", "title": "SG: Approach the Green"},
+        {"id": "02567", "title": "SG: Off the Tee"},
+        {"id": "02569", "title": "SG: Around the Green"},
+        {"id": "02564", "title": "SG: Tee-to-Green"},
+    ]},
+    {"category": "Driving", "stats": [
+        {"id": "02330", "title": "Driving Distance"},
+        {"id": "02401", "title": "Driving Accuracy %"},
+        {"id": "02534", "title": "Total Driving"},
+    ]},
+    {"category": "Approach the Green", "stats": [
+        {"id": "02329", "title": "Greens in Regulation %"},
+        {"id": "02388", "title": "Proximity to Hole"},
+        {"id": "02393", "title": "Proximity 100-125 yards"},
+        {"id": "02394", "title": "Proximity 125-150 yards"},
+        {"id": "02395", "title": "Proximity 150-175 yards"},
+        {"id": "02396", "title": "Proximity 175-200 yards"},
+        {"id": "02397", "title": "Proximity 200+ yards"},
+        {"id": "02463", "title": "Proximity 50-125 yards"},
+    ]},
+    {"category": "Around the Green", "stats": [
+        {"id": "02429", "title": "Scrambling"},
+        {"id": "02430", "title": "Sand Save %"},
+        {"id": "130",   "title": "Scrambling from Sand"},
+        {"id": "02431", "title": "Scrambling from Rough"},
+    ]},
+    {"category": "Putting", "stats": [
+        {"id": "02428", "title": "Putts per Round"},
+        {"id": "02415", "title": "1-Putt %"},
+        {"id": "02416", "title": "3-Putt Avoidance"},
+        {"id": "02383", "title": "Putting from 5 feet"},
+        {"id": "02384", "title": "Putting from 10 feet"},
+        {"id": "02385", "title": "Putting from 15 feet"},
+        {"id": "02386", "title": "Putting from 20 feet"},
+        {"id": "101",   "title": "One-Putt %"},
+    ]},
+    {"category": "Scoring", "stats": [
+        {"id": "120",   "title": "Scoring Average"},
+        {"id": "02511", "title": "Birdie Average"},
+        {"id": "02512", "title": "Eagle Average"},
+        {"id": "02513", "title": "Bogey Average"},
+        {"id": "02333", "title": "Par 3 Scoring Average"},
+        {"id": "02334", "title": "Par 4 Scoring Average"},
+        {"id": "02335", "title": "Par 5 Scoring Average"},
+    ]},
+]
+
+
 class PGATourStats:
     def __init__(self, timeout: int = 20):
         self.session = requests.Session()
@@ -125,11 +179,10 @@ class PGATourStats:
         self.timeout = timeout
         self._current_year = datetime.utcnow().year
 
-    def get_stat_categories(self) -> list[dict]:
+    def get_stat_categories(self) -> tuple[list[dict], str]:
         """
         Fetch the full stat catalog grouped by category.
-        Returns list of {"category": str, "stats": [{"id": str, "title": str}]}.
-        Returns an empty list if the endpoint doesn't support the query.
+        Returns (categories, error_message). categories is empty on failure.
         """
         payload = {
             "query": _CATEGORIES_QUERY,
@@ -139,8 +192,13 @@ class PGATourStats:
             resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
             resp.raise_for_status()
             data = resp.json()
+            errors = data.get("errors")
+            if errors:
+                return [], f"GraphQL error: {errors[0].get('message', errors)}"
             raw = data.get("data", {}).get("statCategories") or []
-            return [
+            if not raw:
+                return [], "statCategories returned empty — query may not be supported"
+            categories = [
                 {
                     "category": cat.get("displayName", "Other"),
                     "stats": [
@@ -152,8 +210,9 @@ class PGATourStats:
                 for cat in raw
                 if cat.get("stats")
             ]
-        except Exception:
-            return []
+            return categories, ""
+        except Exception as exc:
+            return [], str(exc)
 
     def _fetch_stat(self, stat_id: str, season: int) -> list:
         """Fetch raw stat entries for one stat + season. Returns list of player dicts."""

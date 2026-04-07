@@ -100,64 +100,51 @@ def run_setup_stats():
     console.print()
     console.print(Rule("[bold]Weekly stats setup[/bold]"))
     console.print()
-    console.print("[cyan]Fetching PGA Tour stat catalog…[/cyan]")
+    from datagolf.pgatour import CURATED_STATS
 
     pga = PGATourStats()
-    categories = pga.get_stat_categories()
+    console.print("[cyan]Fetching PGA Tour stat catalog…[/cyan]")
+    categories, err = pga.get_stat_categories()
+
+    if not categories:
+        console.print(f"[dim]API catalog unavailable ({err}) — using built-in list.[/dim]")
+        categories = CURATED_STATS
 
     selected = []
 
-    if categories:
-        # Build a flat numbered list across all categories
-        all_stats = []
-        for cat in categories:
-            for s in cat["stats"]:
-                all_stats.append((cat["category"], s["id"], s["title"]))
+    # Build a flat numbered list across all categories
+    idx = 1
+    idx_map = {}
+    for cat in categories:
+        console.print(f"\n[bold]{cat['category']}[/bold]")
+        for s in cat["stats"]:
+            console.print(f"  [dim]{idx:>3}[/dim]  {s['title']:<45} [dim]{s['id']}[/dim]")
+            idx_map[idx] = {"id": s["id"], "label": s["title"]}
+            idx += 1
 
-        # Print grouped
-        idx = 1
-        idx_map = {}
-        for cat in categories:
-            console.print(f"\n[bold]{cat['category']}[/bold]")
-            for s in cat["stats"]:
-                console.print(f"  [dim]{idx:>4}[/dim]  {s['title']:<45} [dim]{s['id']}[/dim]")
-                idx_map[idx] = {"id": s["id"], "label": s["title"]}
-                idx += 1
+    console.print()
+    console.print("[dim]Enter 5 numbers from the list above, or type a stat ID directly.[/dim]")
+    console.print()
 
-        console.print()
-        console.print("[dim]Enter 5 stat numbers from the list above (or type a stat ID directly).[/dim]")
-        console.print()
-
-        for i in range(1, 6):
-            while True:
-                raw = Prompt.ask(f"  Stat {i}", console=console).strip()
-                # Allow entry by number or raw ID
-                if raw.isdigit() and int(raw) in idx_map:
-                    chosen = idx_map[int(raw)]
-                    label = Prompt.ask(
-                        f"    Label for '{chosen['label']}'",
-                        default=chosen["label"],
-                        console=console,
-                    )
-                    selected.append({"id": chosen["id"], "label": label})
-                    break
-                elif raw:
-                    # Treat as raw stat ID
-                    label = Prompt.ask(f"    Label for stat {raw}", default=raw, console=console)
-                    selected.append({"id": raw, "label": label})
-                    break
-                else:
-                    console.print("  [red]Please enter a number or stat ID.[/red]")
-    else:
-        # Fallback: manual ID entry
-        console.print("[yellow]Could not fetch stat catalog — enter stat IDs manually.[/yellow]")
-        console.print("[dim]Find IDs at pgatour.com/stats/detail/<ID>[/dim]")
-        console.print()
-        from rich.prompt import Prompt
-        for i in range(1, 6):
-            stat_id = Prompt.ask(f"  Stat {i} ID", console=console).strip()
-            label   = Prompt.ask(f"  Stat {i} label", default=stat_id, console=console)
-            selected.append({"id": stat_id, "label": label})
+    for i in range(1, 6):
+        while True:
+            raw = Prompt.ask(f"  Stat {i}", console=console).strip()
+            if raw.isdigit() and int(raw) in idx_map:
+                chosen = idx_map[int(raw)]
+                label = Prompt.ask(
+                    f"    Label for '{chosen['label']}'",
+                    default=chosen["label"],
+                    console=console,
+                )
+                selected.append({"id": chosen["id"], "label": label})
+                break
+            elif raw:
+                # Treat as a raw stat ID typed directly
+                label = Prompt.ask(f"    Label for stat {raw}", default=raw, console=console)
+                selected.append({"id": raw, "label": label})
+                break
+            else:
+                console.print("  [red]Please enter a number or stat ID.[/red]")
 
     console.print()
     from datagolf.pgatour import auto_season_weight
