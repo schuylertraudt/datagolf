@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip prediction fetching; rank by SG stats only")
     p.add_argument("--no-prompt", action="store_true",
                    help="Skip interactive weight/blend prompts; use defaults or --weight-* flags")
+    p.add_argument("--save-settings", action="store_true",
+                   help="Save weights and blend config to settings.json after prompts (used by server.py)")
     p.add_argument("--matchups", action="store_true",
                    help="Fetch DK/FD matchup lines and show edges vs your model odds")
     p.add_argument("--matchups-market", default="round_matchups",
@@ -380,6 +382,13 @@ def main():
             history_cfg = {**DEFAULT_HISTORY, "dg_weight": 0.5}
         else:
             weights, history_cfg = prompt_pre_tournament_config(args)
+
+        if args.save_settings:
+            import json as _json
+            settings = {"weights": weights, "history": history_cfg, "tour": args.tour}
+            with open("settings.json", "w") as f:
+                _json.dump(settings, f, indent=2)
+            console.print("[green]Settings saved to settings.json[/green]")
 
         model = RankingModel(weights)
 
