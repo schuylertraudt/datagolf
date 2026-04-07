@@ -17,7 +17,60 @@ import requests
 import pandas as pd
 import numpy as np
 from typing import Optional
-from datetime import datetime
+from datetime import date, datetime
+
+
+def auto_season_weight(today: date = None) -> tuple[float, str]:
+    """
+    Calculate an appropriate current-season blend weight based on where
+    we are in the PGA Tour season.
+
+    The PGA Tour season runs approximately Oct 15 → Aug 31 each year.
+    Weight ramps linearly from 0.10 (season start) to 0.90 (season end).
+
+      Early season (Oct–Nov): ~0.10–0.20  — little current data, lean on prev season
+      Mid season   (Jan–Apr): ~0.30–0.60  — balanced blend
+      Late season  (May–Aug): ~0.65–0.90  — current season dominates
+
+    Returns (weight, description_string).
+    """
+    if today is None:
+        today = date.today()
+
+    month = today.month
+    year  = today.year
+
+    # PGA Tour season: starts ~Oct 15, ends ~Aug 31
+    # If we're in Sep, we're between seasons — clamp to just-started
+    if month == 9:
+        return 0.05, "off-season / between seasons (Sep)"
+
+    # Season start: Oct 15 of current year (if Oct–Dec) or previous year (if Jan–Aug)
+    if month >= 10:
+        season_start = date(year,     10, 15)
+        season_end   = date(year + 1,  8, 31)
+    else:
+        season_start = date(year - 1, 10, 15)
+        season_end   = date(year,      8, 31)
+
+    total_days   = (season_end   - season_start).days
+    elapsed_days = (today        - season_start).days
+    elapsed_days = max(0, min(elapsed_days, total_days))
+
+    progress = elapsed_days / total_days          # 0.0 → 1.0
+    weight   = round(0.10 + progress * 0.80, 2)  # 0.10 → 0.90
+
+    # Human-readable stage
+    if progress < 0.20:
+        stage = "early season — leaning on previous season"
+    elif progress < 0.55:
+        stage = "mid season — balanced blend"
+    else:
+        stage = "late season — current season dominant"
+
+    pct_through = int(progress * 100)
+    desc = f"{weight:.0%} current / {1-weight:.0%} previous  ({pct_through}% through season — {stage})"
+    return weight, desc
 
 # Public API key embedded in pgatour.com's JavaScript bundle.
 # If requests start failing with 401, inspect network traffic on pgatour.com/stats
