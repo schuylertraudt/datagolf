@@ -731,8 +731,8 @@ def main():
                 df["Course Hist Rk"] = df["Course Hist Rk"].apply(
                     lambda x: int(x) if pd.notna(x) else None
                 )
-        except Exception:
-            pass  # Course history unavailable — skip silently
+        except Exception as _ch_exc:
+            console.print(f"[dim]course history skipped: {_ch_exc}[/dim]")
 
     top_n = 0 if args.all else args.top
     display_rankings(
