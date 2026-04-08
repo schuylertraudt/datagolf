@@ -216,12 +216,20 @@ class PGATourStats:
 
     def _fetch_stat(self, stat_id: str) -> tuple:
         """Fetch raw stat entries for a stat. Returns (entries, title)."""
+        # First, introspect to find the current StatDetails field names
+        introspect = {
+            "query": """{ __type(name: "StatDetails") { fields { name type { name kind ofType { name } } } } }"""
+        }
+        try:
+            r = self.session.post(_API_URL, json=introspect, timeout=self.timeout)
+            fields = ((r.json().get("data") or {}).get("__type") or {}).get("fields") or []
+            print(f"  [pgatour schema] StatDetails fields: {[f['name'] for f in fields]}")
+        except Exception as e:
+            print(f"  [pgatour schema] introspection failed: {e}")
+
         payload = {
             "query": _STAT_QUERY,
-            "variables": {
-                "tourCode": "R",   # "R" = PGA Tour
-                "statId": stat_id,
-            },
+            "variables": {"tourCode": "R", "statId": stat_id},
         }
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
