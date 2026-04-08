@@ -42,6 +42,57 @@ from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel, american_to_prob
 WEEKLY_STATS_FILE = "weekly_stats.json"
 
 
+def parse_course_history(raw: dict) -> pd.DataFrame:
+    """
+    Parse a DataGolf historical-raw-data/event response into a per-player
+    course history rank DataFrame.
+
+    Returns DataFrame with columns: player_name (lowercased), course_hist_rank.
+    Rank is based on average sg_total across appearances (1 = best).
+    Falls back to sg_t2g, then negated scoring_avg if sg_total is unavailable.
+    """
+    records = raw.get("data") or raw.get("players") or []
+    if not records:
+        return pd.DataFrame(columns=["player_name", "course_hist_rank"])
+
+    rows = []
+    for p in records:
+        name = (
+            p.get("player_name") or p.get("player") or p.get("name") or ""
+        ).strip()
+        if not name:
+            continue
+        sg = _to_float_ch(p.get("sg_total"))
+        if sg is None:
+            sg = _to_float_ch(p.get("sg_t2g"))
+        if sg is None:
+            avg = _to_float_ch(p.get("scoring_avg") or p.get("avg_score"))
+            if avg is not None:
+                sg = -avg  # lower score = better → negate so higher = better
+        rows.append({"player_name": name.lower(), "sg_val": sg})
+
+    if not rows:
+        return pd.DataFrame(columns=["player_name", "course_hist_rank"])
+
+    df = pd.DataFrame(rows)
+    # Average across multiple rows per player (one per year)
+    df = df.groupby("player_name", as_index=False)["sg_val"].mean()
+    df = df.dropna(subset=["sg_val"])
+    if df.empty:
+        return pd.DataFrame(columns=["player_name", "course_hist_rank"])
+
+    df = df.sort_values("sg_val", ascending=False).reset_index(drop=True)
+    df["course_hist_rank"] = df.index + 1
+    return df[["player_name", "course_hist_rank"]]
+
+
+def _to_float_ch(val):
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def load_weekly_stats():
     """Load weekly PGA Tour stat config. Returns (stats, season_weight)."""
     from datagolf.pgatour import auto_season_weight
@@ -661,6 +712,20 @@ def main():
             stat_dfs = fetch_weekly_stats(stat_configs)
         if stat_dfs:
             df = merge_weekly_stats(df, stat_dfs)
+
+    # --- Course history ---
+    with console.status("[cyan]Fetching course history…[/cyan]"):
+        try:
+            ch_raw = client.get_course_history(tour=args.tour)
+            ch_df = parse_course_history(ch_raw)
+            if not ch_df.empty:
+                lookup = ch_df.set_index("player_name")["course_hist_rank"]
+                df["Course Hist Rk"] = df["player_name"].str.strip().str.lower().map(lookup)
+                df["Course Hist Rk"] = df["Course Hist Rk"].apply(
+                    lambda x: int(x) if pd.notna(x) else None
+                )
+        except Exception as exc:
+            console.print(f"[yellow]Warning:[/yellow] Could not fetch course history: {exc}")
 
     top_n = 0 if args.all else args.top
     display_rankings(

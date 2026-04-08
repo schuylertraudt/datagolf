@@ -92,6 +92,44 @@ def get_rankings(force: bool = False) -> dict:
         return data
 
 
+def _parse_course_history_srv(raw: dict):
+    """Parse historical-raw-data/event response into a rank DataFrame."""
+    import pandas as pd
+
+    records = raw.get("data") or raw.get("players") or []
+    rows = []
+    for p in records:
+        name = (p.get("player_name") or p.get("player") or p.get("name") or "").strip()
+        if not name:
+            continue
+        def _f(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        sg = _f(p.get("sg_total"))
+        if sg is None:
+            sg = _f(p.get("sg_t2g"))
+        if sg is None:
+            avg = _f(p.get("scoring_avg") or p.get("avg_score"))
+            if avg is not None:
+                sg = -avg
+        rows.append({"player_name": name.lower(), "sg_val": sg})
+
+    if not rows:
+        return pd.DataFrame(columns=["player_name", "course_hist_rank"])
+
+    df = pd.DataFrame(rows)
+    df = df.groupby("player_name", as_index=False)["sg_val"].mean()
+    df = df.dropna(subset=["sg_val"])
+    if df.empty:
+        return pd.DataFrame(columns=["player_name", "course_hist_rank"])
+
+    df = df.sort_values("sg_val", ascending=False).reset_index(drop=True)
+    df["course_hist_rank"] = df.index + 1
+    return df[["player_name", "course_hist_rank"]]
+
+
 def _fetch(settings: dict) -> dict:
     load_dotenv()
     api_key = os.getenv("DATAGOLF_API_KEY")
@@ -136,6 +174,21 @@ def _fetch(settings: dict) -> dict:
                 extra_cols.append(col)
             except Exception:
                 pass
+
+    # Course history
+    try:
+        import pandas as _pd
+        ch_raw = client.get_course_history(tour=tour)
+        ch_df = _parse_course_history_srv(ch_raw)
+        if not ch_df.empty:
+            lookup = ch_df.set_index("player_name")["course_hist_rank"]
+            df["Course Hist Rk"] = df["player_name"].str.strip().str.lower().map(lookup)
+            df["Course Hist Rk"] = df["Course Hist Rk"].apply(
+                lambda x: int(x) if not _pd.isna(x) else None
+            )
+            extra_cols.append("Course Hist Rk")
+    except Exception:
+        pass
 
     # Matchups
     matchups_html = ""

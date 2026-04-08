@@ -141,3 +141,22 @@ class DataGolfClient:
         except Exception:
             # skill-ratings is a reliable fallback: it reflects rolling SG averages
             return self._get("preds/skill-ratings", {})
+
+    def get_course_history(
+        self,
+        tour: str = "pga",
+        event_id: str = "",
+        years: int = 5,
+    ) -> dict:
+        """
+        Historical per-player results at the current tournament venue.
+        Returns aggregated SG stats across past appearances (up to `years` years).
+
+        event_id: DataGolf event ID (e.g. "014"). If omitted, DataGolf infers
+                  the current tournament automatically.
+        years:    Number of years of history to retrieve (default 5).
+        """
+        params: dict = {"tour": tour, "years": years}
+        if event_id:
+            params["event_id"] = event_id
+        return self._get("historical-raw-data/event", params)
