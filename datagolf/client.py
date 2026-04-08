@@ -146,17 +146,18 @@ class DataGolfClient:
         self,
         tour: str = "pga",
         event_id: str = "",
-        years: int = 5,
+        n_rounds: int = 40,
     ) -> dict:
         """
-        Historical per-player results at the current tournament venue.
-        Returns aggregated SG stats across past appearances (up to `years` years).
+        Historical per-player results at the current tournament venue,
+        pulled via historical-raw-data/rounds filtered to a specific event_id.
 
-        event_id: DataGolf event ID (e.g. "014"). If omitted, DataGolf infers
-                  the current tournament automatically.
-        years:    Number of years of history to retrieve (default 5).
+        event_id: DataGolf event ID found in the predictions/live-stats response.
+                  If empty, falls back to the unfiltered rolling rounds endpoint
+                  (less useful for course-specific ranking).
+        n_rounds: Maximum rounds to look back (default 40 covers ~5 years of one event).
         """
-        params: dict = {"tour": tour, "years": years}
+        params: dict = {"tour": tour, "n_rounds": n_rounds}
         if event_id:
             params["event_id"] = event_id
-        return self._get("historical-raw-data/event", params)
+        return self._get("historical-raw-data/rounds", params)

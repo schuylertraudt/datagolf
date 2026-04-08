@@ -723,6 +723,7 @@ def main():
     with console.status("[cyan]Fetching course history…[/cyan]"):
         try:
             ch_raw = client.get_course_history(tour=args.tour, event_id=event_id)
+            console.print(f"[dim]DEBUG course history keys: {list(ch_raw.keys())[:6]}  event_id used: {event_id!r}[/dim]")
             ch_df = parse_course_history(ch_raw)
             if not ch_df.empty:
                 lookup = ch_df.set_index("player_name")["course_hist_rank"]
@@ -730,8 +731,8 @@ def main():
                 df["Course Hist Rk"] = df["Course Hist Rk"].apply(
                     lambda x: int(x) if pd.notna(x) else None
                 )
-        except Exception as exc:
-            console.print(f"[yellow]Warning:[/yellow] Could not fetch course history: {exc}")
+        except Exception:
+            pass  # Course history unavailable — skip silently
 
     top_n = 0 if args.all else args.top
     display_rankings(
