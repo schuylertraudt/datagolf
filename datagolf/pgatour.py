@@ -79,8 +79,8 @@ _API_URL = "https://orchestrator.pgatour.com/graphql"
 _API_KEY  = "da2-gsrx5bibzbb4njvhl7t37wqyl4"
 
 _STAT_QUERY = """
-query StatDetails($tourCode: TourCode!, $statId: String!, $season: Int) {
-  statDetails(tourCode: $tourCode, statId: $statId, season: $season) {
+query StatDetails($tourCode: TourCode!, $statId: String!) {
+  statDetails(tourCode: $tourCode, statId: $statId) {
     tourCode
     year
     statId
@@ -214,20 +214,18 @@ class PGATourStats:
         except Exception as exc:
             return [], str(exc)
 
-    def _fetch_stat(self, stat_id: str, season: int) -> list:
-        """Fetch raw stat entries for one stat + season. Returns list of player dicts."""
+    def _fetch_stat(self, stat_id: str) -> tuple:
+        """Fetch raw stat entries for a stat. Returns (entries, title)."""
         payload = {
             "query": _STAT_QUERY,
             "variables": {
                 "tourCode": "R",   # "R" = PGA Tour
                 "statId": stat_id,
-                "season": season,
             },
         }
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
-        print(f"  [pgatour debug] stat={stat_id} season={season} raw={repr(data)[:300]}")
         details = (data.get("data") or {}).get("statDetails") or {}
         return details.get("statEntries") or [], details.get("statTitle", "")
 
@@ -235,71 +233,22 @@ class PGATourStats:
         self,
         stat_id: str,
         label: Optional[str] = None,
-        current_weight: float = 0.6,
+        current_weight: float = 0.6,  # kept for API compatibility, unused
     ) -> pd.DataFrame:
         """
-        Fetch a stat for the current AND previous season, then produce a single
-        combined rank per player using a weighted average of their season percentiles.
-
-        current_weight: 0–1. Weight given to current season (rest goes to previous).
-
-        Returns a DataFrame with columns:
-            player_name, stat_id, label, combined_rank,
-            cur_rank, cur_value, prev_rank, prev_value
+        Fetch a stat and rank players. Returns a DataFrame with columns:
+            player_name, stat_id, label, combined_rank, cur_rank, cur_value
         """
-        cur_year  = self._current_year
-        prev_year = cur_year - 1
+        entries, title = self._fetch_stat(stat_id)
+        df = _entries_to_df(entries, suffix="cur")
+        if df.empty:
+            return pd.DataFrame(columns=["player_name", "stat_id", "label", "combined_rank", "cur_rank", "cur_value"])
 
-        cur_entries,  title = self._fetch_stat(stat_id, cur_year)
-        prev_entries, _     = self._fetch_stat(stat_id, prev_year)
-
-        cur_df  = _entries_to_df(cur_entries,  suffix="cur")
-        prev_df = _entries_to_df(prev_entries, suffix="prev")
-
-        # Merge on normalized player name
-        df = cur_df.merge(prev_df, on="player_name", how="outer")
-
-        n_cur  = df["cur_rank"].notna().sum()
-        n_prev = df["prev_rank"].notna().sum()
-
-        # Convert ranks to percentiles (lower rank = better = higher percentile)
-        # Percentile = 1 - (rank - 1) / (n - 1), capped to [0, 1]
-        if n_cur > 1:
-            df["cur_pct"]  = 1 - (df["cur_rank"]  - 1) / (n_cur  - 1)
-        else:
-            df["cur_pct"]  = np.nan
-
-        if n_prev > 1:
-            df["prev_pct"] = 1 - (df["prev_rank"] - 1) / (n_prev - 1)
-        else:
-            df["prev_pct"] = np.nan
-
-        prev_weight = 1.0 - current_weight
-
-        # Blend percentiles; fall back to whichever season is available
-        has_both = df["cur_pct"].notna() & df["prev_pct"].notna()
-        has_cur  = df["cur_pct"].notna() & df["prev_pct"].isna()
-        has_prev = df["cur_pct"].isna()  & df["prev_pct"].notna()
-
-        df["blended_pct"] = np.nan
-        df.loc[has_both, "blended_pct"] = (
-            current_weight * df.loc[has_both, "cur_pct"] +
-            prev_weight    * df.loc[has_both, "prev_pct"]
-        )
-        df.loc[has_cur,  "blended_pct"] = df.loc[has_cur,  "cur_pct"]
-        df.loc[has_prev, "blended_pct"] = df.loc[has_prev, "prev_pct"]
-
-        # Convert blended percentile back to a combined rank (1 = best)
-        df = df.sort_values("blended_pct", ascending=False).reset_index(drop=True)
-        df["combined_rank"] = df.index + 1
-
+        df = df.sort_values("cur_rank").reset_index(drop=True)
+        df["combined_rank"] = df["cur_rank"].rank(method="min").astype("Int64")
         df["stat_id"] = stat_id
         df["label"]   = label or title or stat_id
-
-        return df[[
-            "player_name", "stat_id", "label", "combined_rank",
-            "cur_rank", "cur_value", "prev_rank", "prev_value",
-        ]]
+        return df[["player_name", "stat_id", "label", "combined_rank", "cur_rank", "cur_value"]]
 
 
 # ---------------------------------------------------------------------------

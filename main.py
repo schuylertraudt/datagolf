@@ -67,7 +67,6 @@ def fetch_weekly_stats(stat_configs) -> dict[str, pd.DataFrame]:
     for s in stat_configs:
         try:
             df = client.get_combined_stat(s["id"], label=s.get("label"))
-            console.print(f"[dim]DEBUG stat {s.get('label', s['id'])}: {len(df)} rows, sample names: {list(df['player_name'].head(3))}[/dim]")
             results[s.get("label", s["id"])] = df
         except Exception as exc:
             console.print(f"[yellow]Warning:[/yellow] Could not fetch PGA Tour stat {s.get('label', s['id'])}: {exc}")
