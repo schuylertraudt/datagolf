@@ -211,12 +211,12 @@ class PGATourStats:
             "query": _STAT_QUERY,
             "variables": {"tourCode": "R", "statId": stat_id},
         }
-        # Introspect rows field type on first call
-        schema_q = {"query": '{ __type(name: "StatDetails") { fields { name type { name kind ofType { name kind ofType { name } } } } } }'}
+        # Introspect the union/interface members of rows
+        schema_q = {"query": '{ __type(name: "StatDetails") { fields { name type { name kind ofType { name kind ofType { name kind ofType { name kind } } } } } } }'}
         r2 = self.session.post(_API_URL, json=schema_q, timeout=self.timeout)
         fields = ((r2.json().get("data") or {}).get("__type") or {}).get("fields") or []
         rows_field = next((f for f in fields if f["name"] == "rows"), None)
-        print(f"  [pgatour rows type] {repr(rows_field)[:300]}")
+        print(f"  [pgatour rows type deep] {repr(rows_field)[:400]}")
 
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
@@ -224,7 +224,10 @@ class PGATourStats:
         details = (data.get("data") or {}).get("statDetails") or {}
         rows = details.get("rows") or []
         title = details.get("statTitle", "")
-        print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} rows={len(rows)}")
+        if rows:
+            print(f"  [pgatour] stat={stat_id} rows={len(rows)} typenames={list(set(r.get('__typename') for r in rows[:10]))}")
+        else:
+            print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} rows=0")
         return rows, title
 
     def get_combined_stat(
