@@ -83,9 +83,15 @@ query StatDetails($tourCode: TourCode!, $statId: String!) {
   statDetails(tourCode: $tourCode, statId: $statId) {
     statId
     statTitle
-    statHeaders
     rows {
-      __typename
+      ... on StatDetailsPlayer {
+        playerName
+        rank
+        stats {
+          statValue
+          statId
+        }
+      }
     }
   }
 }
@@ -211,30 +217,12 @@ class PGATourStats:
             "query": _STAT_QUERY,
             "variables": {"tourCode": "R", "statId": stat_id},
         }
-        # Introspect the StatDetailsRow union members
-        schema_q = {"query": '{ __type(name: "StatDetailsRow") { possibleTypes { name } } }'}
-        r2 = self.session.post(_API_URL, json=schema_q, timeout=self.timeout)
-        possible = ((r2.json().get("data") or {}).get("__type") or {}).get("possibleTypes") or []
-        type_names = [t["name"] for t in possible]
-        print(f"  [pgatour union types] {type_names}")
-        # Also introspect fields of each type
-        for tn in type_names:
-            fq = {"query": f'{{ __type(name: "{tn}") {{ fields {{ name }} }} }}'}
-            fr = self.session.post(_API_URL, json=fq, timeout=self.timeout)
-            ffields = [f["name"] for f in (((fr.json().get("data") or {}).get("__type") or {}).get("fields") or [])]
-            print(f"  [pgatour {tn} fields] {ffields}")
-
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         details = (data.get("data") or {}).get("statDetails") or {}
-        rows = details.get("rows") or []
-        title = details.get("statTitle", "")
-        if rows:
-            print(f"  [pgatour] stat={stat_id} rows={len(rows)} typenames={list(set(r.get('__typename') for r in rows[:10]))}")
-        else:
-            print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} rows=0")
-        return rows, title
+        rows = [r for r in (details.get("rows") or []) if r.get("playerName")]
+        return rows, details.get("statTitle", "")
 
     def get_combined_stat(
         self,
@@ -263,21 +251,16 @@ class PGATourStats:
 # ---------------------------------------------------------------------------
 
 def _entries_to_df(entries: list, suffix: str) -> pd.DataFrame:
-    """Convert raw GraphQL stat entries to a normalized DataFrame."""
+    """Convert raw GraphQL stat rows (StatDetailsPlayer) to a normalized DataFrame."""
     rows = []
     for e in entries:
         name = _normalize_name(e.get("playerName") or "")
         if not name:
             continue
         rank = _to_int(e.get("rank"))
-        # Primary value: try average, then total, then first statValue
-        value = _to_float(e.get("average"))
-        if value is None:
-            value = _to_float(e.get("total"))
-        if value is None:
-            stat_vals = e.get("statValues") or []
-            if stat_vals:
-                value = _to_float(stat_vals[0].get("statValue"))
+        # Primary value: first entry in stats list
+        stat_vals = e.get("stats") or []
+        value = _to_float(stat_vals[0].get("statValue")) if stat_vals else None
         rows.append({"player_name": name, f"{suffix}_rank": rank, f"{suffix}_value": value})
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=["player_name", f"{suffix}_rank", f"{suffix}_value"]
