@@ -226,6 +226,7 @@ class PGATourStats:
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
+        print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} entries={len(((data.get('data') or {}).get('statDetails') or {}).get('statEntries') or [])}")
         details = (data.get("data") or {}).get("statDetails") or {}
         return details.get("statEntries") or [], details.get("statTitle", "")
 
