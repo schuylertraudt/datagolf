@@ -81,19 +81,18 @@ _API_KEY  = "da2-gsrx5bibzbb4njvhl7t37wqyl4"
 _STAT_QUERY = """
 query StatDetails($tourCode: TourCode!, $statId: String!) {
   statDetails(tourCode: $tourCode, statId: $statId) {
-    tourCode
-    year
     statId
     statTitle
-    statEntries {
-      playerId
-      playerName
-      rank
-      total
-      average
-      statValues {
-        statValue
-        label
+    statHeaders
+    rows {
+      ... on StatsRow {
+        rank
+        displayValue
+        playerName
+        statValues {
+          statValue
+          color
+        }
       }
     }
   }
@@ -215,18 +214,7 @@ class PGATourStats:
             return [], str(exc)
 
     def _fetch_stat(self, stat_id: str) -> tuple:
-        """Fetch raw stat entries for a stat. Returns (entries, title)."""
-        # First, introspect to find the current StatDetails field names
-        introspect = {
-            "query": """{ __type(name: "StatDetails") { fields { name type { name kind ofType { name } } } } }"""
-        }
-        try:
-            r = self.session.post(_API_URL, json=introspect, timeout=self.timeout)
-            fields = ((r.json().get("data") or {}).get("__type") or {}).get("fields") or []
-            print(f"  [pgatour schema] StatDetails fields: {[f['name'] for f in fields]}")
-        except Exception as e:
-            print(f"  [pgatour schema] introspection failed: {e}")
-
+        """Fetch raw stat entries for a stat. Returns (rows, title)."""
         payload = {
             "query": _STAT_QUERY,
             "variables": {"tourCode": "R", "statId": stat_id},
@@ -234,9 +222,14 @@ class PGATourStats:
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
-        print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} entries={len(((data.get('data') or {}).get('statDetails') or {}).get('statEntries') or [])}")
         details = (data.get("data") or {}).get("statDetails") or {}
-        return details.get("statEntries") or [], details.get("statTitle", "")
+        rows = details.get("rows") or []
+        title = details.get("statTitle", "")
+        if rows:
+            print(f"  [pgatour] stat={stat_id} rows={len(rows)} first={repr(rows[0])[:200]}")
+        else:
+            print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} rows=0")
+        return rows, title
 
     def get_combined_stat(
         self,
