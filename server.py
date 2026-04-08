@@ -178,7 +178,12 @@ def _fetch(settings: dict) -> dict:
     # Course history
     try:
         import pandas as _pd
-        ch_raw = client.get_course_history(tour=tour)
+        _event_id = str(
+            (predictions_raw or {}).get("event_id")
+            or short_raw.get("event_id")
+            or ""
+        ).strip()
+        ch_raw = client.get_course_history(tour=tour, event_id=_event_id)
         ch_df = _parse_course_history_srv(ch_raw)
         if not ch_df.empty:
             lookup = ch_df.set_index("player_name")["course_hist_rank"]

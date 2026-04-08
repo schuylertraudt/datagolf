@@ -227,10 +227,7 @@ class PGATourStats:
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
-        details = (
-            data.get("data", {})
-                .get("statDetails", {})
-        )
+        details = (data.get("data") or {}).get("statDetails") or {}
         return details.get("statEntries") or [], details.get("statTitle", "")
 
     def get_combined_stat(

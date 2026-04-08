@@ -714,9 +714,15 @@ def main():
             df = merge_weekly_stats(df, stat_dfs)
 
     # --- Course history ---
+    # Extract event_id from whichever raw response has it
+    _pred_raw = predictions_raw or {}
+    _live_raw = stats_raw if not args.pre_tournament else short_raw
+    event_id = (
+        str(_pred_raw.get("event_id") or _live_raw.get("event_id") or "").strip()
+    )
     with console.status("[cyan]Fetching course history…[/cyan]"):
         try:
-            ch_raw = client.get_course_history(tour=args.tour)
+            ch_raw = client.get_course_history(tour=args.tour, event_id=event_id)
             ch_df = parse_course_history(ch_raw)
             if not ch_df.empty:
                 lookup = ch_df.set_index("player_name")["course_hist_rank"]
