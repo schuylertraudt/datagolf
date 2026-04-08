@@ -125,14 +125,19 @@ def _fetch(settings: dict) -> dict:
     stat_configs, season_weight = _load_weekly_stats()
     extra_cols = []
     if stat_configs:
+        from datagolf.pgatour import _normalize_name
+        import pandas as _pd
         pga = PGATourStats()
+        normalized_names = df["player_name"].apply(
+            lambda n: _normalize_name(str(n)) if not _pd.isna(n) else ""
+        )
         for s in stat_configs:
             try:
                 stat_df = pga.get_combined_stat(s["id"], label=s.get("label"), current_weight=season_weight)
                 col = f"{s.get('label', s['id'])} Rk"
                 lookup = stat_df.set_index("player_name")["combined_rank"]
-                df[col] = df["player_name"].str.strip().str.lower().map(lookup)
-                df[col] = df[col].apply(lambda x: int(x) if not __import__("pandas").isna(x) else None)
+                df[col] = normalized_names.map(lookup)
+                df[col] = df[col].apply(lambda x: int(x) if not _pd.isna(x) else None)
                 extra_cols.append(col)
             except Exception:
                 pass

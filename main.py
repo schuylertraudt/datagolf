@@ -78,12 +78,15 @@ def merge_weekly_stats(rankings_df: pd.DataFrame, stat_dfs: dict[str, pd.DataFra
     Left-join each weekly stat's combined_rank onto the rankings DataFrame.
     Adds one column per stat named '<label> Rk'.
     """
+    from datagolf.pgatour import _normalize_name
+
     df = rankings_df.copy()
+    # Pre-compute normalized names once (handles "Last, First" → "first last")
+    normalized = df["player_name"].apply(lambda n: _normalize_name(str(n)) if pd.notna(n) else "")
     for label, stat_df in stat_dfs.items():
         col = f"{label} Rk"
         lookup = stat_df.set_index("player_name")["combined_rank"]
-        # Normalize rankings player names to match PGA Tour format
-        df[col] = df["player_name"].str.strip().str.lower().map(lookup)
+        df[col] = normalized.map(lookup)
         df[col] = df[col].apply(lambda x: int(x) if pd.notna(x) else None)
     return df
 
