@@ -85,15 +85,7 @@ query StatDetails($tourCode: TourCode!, $statId: String!) {
     statTitle
     statHeaders
     rows {
-      ... on StatsRow {
-        rank
-        displayValue
-        playerName
-        statValues {
-          statValue
-          color
-        }
-      }
+      __typename
     }
   }
 }
@@ -219,16 +211,20 @@ class PGATourStats:
             "query": _STAT_QUERY,
             "variables": {"tourCode": "R", "statId": stat_id},
         }
+        # Introspect rows field type on first call
+        schema_q = {"query": '{ __type(name: "StatDetails") { fields { name type { name kind ofType { name kind ofType { name } } } } } }'}
+        r2 = self.session.post(_API_URL, json=schema_q, timeout=self.timeout)
+        fields = ((r2.json().get("data") or {}).get("__type") or {}).get("fields") or []
+        rows_field = next((f for f in fields if f["name"] == "rows"), None)
+        print(f"  [pgatour rows type] {repr(rows_field)[:300]}")
+
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         details = (data.get("data") or {}).get("statDetails") or {}
         rows = details.get("rows") or []
         title = details.get("statTitle", "")
-        if rows:
-            print(f"  [pgatour] stat={stat_id} rows={len(rows)} first={repr(rows[0])[:200]}")
-        else:
-            print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} rows=0")
+        print(f"  [pgatour] stat={stat_id} errors={data.get('errors')} rows={len(rows)}")
         return rows, title
 
     def get_combined_stat(
