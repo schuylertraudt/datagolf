@@ -211,12 +211,18 @@ class PGATourStats:
             "query": _STAT_QUERY,
             "variables": {"tourCode": "R", "statId": stat_id},
         }
-        # Introspect the union/interface members of rows
-        schema_q = {"query": '{ __type(name: "StatDetails") { fields { name type { name kind ofType { name kind ofType { name kind ofType { name kind } } } } } } }'}
+        # Introspect the StatDetailsRow union members
+        schema_q = {"query": '{ __type(name: "StatDetailsRow") { possibleTypes { name } } }'}
         r2 = self.session.post(_API_URL, json=schema_q, timeout=self.timeout)
-        fields = ((r2.json().get("data") or {}).get("__type") or {}).get("fields") or []
-        rows_field = next((f for f in fields if f["name"] == "rows"), None)
-        print(f"  [pgatour rows type deep] {repr(rows_field)[:400]}")
+        possible = ((r2.json().get("data") or {}).get("__type") or {}).get("possibleTypes") or []
+        type_names = [t["name"] for t in possible]
+        print(f"  [pgatour union types] {type_names}")
+        # Also introspect fields of each type
+        for tn in type_names:
+            fq = {"query": f'{{ __type(name: "{tn}") {{ fields {{ name }} }} }}'}
+            fr = self.session.post(_API_URL, json=fq, timeout=self.timeout)
+            ffields = [f["name"] for f in (((fr.json().get("data") or {}).get("__type") or {}).get("fields") or [])]
+            print(f"  [pgatour {tn} fields] {ffields}")
 
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
