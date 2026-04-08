@@ -123,6 +123,7 @@ def _fetch(settings: dict) -> dict:
 
     # Weekly PGA Tour stats
     stat_configs, season_weight = _load_weekly_stats()
+    print(f"[server] weekly stats loaded: {len(stat_configs)} stats, weight={season_weight}")
     extra_cols = []
     if stat_configs:
         from datagolf.pgatour import _normalize_name
