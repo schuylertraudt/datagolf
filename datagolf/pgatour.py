@@ -231,16 +231,16 @@ class PGATourStats:
         current_weight: float = 0.6,
     ) -> pd.DataFrame:
         """
-        Fetch a stat for the current (2026) and previous (2025) season, blend
-        by percentile rank, and return a single combined_rank per player.
+        Fetch a stat for the current season (API default) and previous season,
+        blend by percentile rank, and return a single combined_rank per player.
 
         current_weight: 0–1. Weight given to current season (rest goes to previous).
 
         Returns DataFrame with columns:
             player_name, stat_id, label, combined_rank, cur_rank, cur_value, prev_rank, prev_value
         """
-        cur_entries,  title = self._fetch_stat(stat_id, year=2026)
-        prev_entries, _     = self._fetch_stat(stat_id, year=2025)
+        cur_entries,  title = self._fetch_stat(stat_id)            # no year = current season default
+        prev_entries, _     = self._fetch_stat(stat_id, year=self._current_year - 1)
 
         cur_df  = _entries_to_df(cur_entries,  suffix="cur")
         prev_df = _entries_to_df(prev_entries, suffix="prev")
