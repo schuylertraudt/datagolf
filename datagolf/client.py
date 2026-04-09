@@ -84,6 +84,21 @@ class DataGolfClient:
         """
         return self._get("preds/skill-ratings", {"display": display})
 
+    def get_outrights(
+        self,
+        tour: str = "pga",
+        market: str = "winner",
+        odds_format: str = "american",
+    ) -> dict:
+        """
+        Outright tournament winner odds from DraftKings, FanDuel, and other books.
+        odds_format: 'american', 'decimal', or 'percent'
+        """
+        return self._get(
+            "betting-tools/outrights",
+            {"tour": tour, "market": market, "odds_format": odds_format},
+        )
+
     def get_matchups(
         self,
         tour: str = "pga",

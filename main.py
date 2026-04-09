@@ -665,9 +665,15 @@ def main():
         if stat_dfs:
             df = merge_weekly_stats(df, stat_dfs)
 
-    # --- Course history ---
-    # Course history requires historical-raw-data/rounds (DataGolf premium tier).
-    # Skipped silently if unavailable.
+    # --- DraftKings outright odds + EV% ---
+    with console.status("[cyan]Fetching DraftKings outright odds…[/cyan]"):
+        try:
+            outrights_raw = client.get_outrights(tour=args.tour)
+            console.print(f"[dim]DEBUG outrights keys: {list(outrights_raw.keys())[:8]}[/dim]")
+            console.print(f"[dim]DEBUG outrights sample: {repr(list(outrights_raw.values())[0])[:300] if outrights_raw else 'empty'}[/dim]")
+        except Exception as exc:
+            console.print(f"[yellow]Warning:[/yellow] Could not fetch DK outright odds: {exc}")
+            outrights_raw = None
 
     top_n = 0 if args.all else args.top
     display_rankings(
