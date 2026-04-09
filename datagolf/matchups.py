@@ -103,15 +103,15 @@ def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.Dat
     if not matchups:
         return pd.DataFrame()
 
-    # Build SG total lookup keyed by normalized name.
-    # We use sg_total (strokes gained per round) as the input to our round-scoring model,
-    # NOT tournament win probability. Win prob is for a 4-round field event; sg_total
-    # directly predicts single-round scoring.
+    # Build SG lookup keyed by normalized name.
+    # Prefer 'matchup_sg' (user-influenced blend) when present; fall back to 'sg_total'.
+    # Both are in strokes/round units, directly usable in round_matchup_prob().
     sg_lookup: dict = {}
-    if model_df is not None and "sg_total" in model_df.columns:
+    if model_df is not None:
+        sg_col = "matchup_sg" if "matchup_sg" in model_df.columns else "sg_total"
         for _, r in model_df.iterrows():
             name = (r.get("player_name") or "").strip()
-            sg = r.get("sg_total")
+            sg = r.get(sg_col)
             if name and sg is not None and not pd.isna(sg):
                 sg_lookup[_normalize_name(name)] = float(sg)
 

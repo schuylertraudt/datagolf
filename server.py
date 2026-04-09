@@ -145,6 +145,31 @@ def _fetch(settings: dict) -> dict:
             except Exception:
                 pass
 
+    # Compute user-influenced SG estimate for matchup model.
+    # Re-weights the four SG components (ott/app/arg/putt) using the user's configured
+    # weights, then blends it at MATCHUP_INFLUENCE into sg_total. On approach-heavy
+    # courses where sg_app is upweighted, players who excel specifically at approach
+    # (relative to their overall SG) receive a small boost.
+    _SG_COMPONENTS = ["sg_ott", "sg_app", "sg_arg", "sg_putt"]
+    _MATCHUP_INFLUENCE = 0.08  # 8% — user weights, 92% raw sg_total
+
+    _sg_comp_weights = {k: v for k, v in weights.items() if k in _SG_COMPONENTS}
+    _total_sg_w = sum(_sg_comp_weights.values())
+    if _total_sg_w > 0:
+        import pandas as _pd
+        _norm_w = {k: v / _total_sg_w for k, v in _sg_comp_weights.items()}
+        _weighted_sg = sum(
+            df[s].fillna(df[s].median()) * w
+            for s, w in _norm_w.items()
+            if s in df.columns
+        )
+        df["matchup_sg"] = (
+            (1 - _MATCHUP_INFLUENCE) * df["sg_total"].fillna(0)
+            + _MATCHUP_INFLUENCE * _weighted_sg
+        )
+    else:
+        df["matchup_sg"] = df["sg_total"]
+
     # DraftKings outright odds
     dk_map = {}
     try:
