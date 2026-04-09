@@ -297,6 +297,17 @@ def _fmt_odds(v):
         return "-"
 
 
+# Books to display and their labels (order matters for column order)
+_BOOK_DISPLAY = {
+    "draftkings": "DraftKings",
+    "fanduel":    "FanDuel",
+    "unibet":     "BetRivers",
+    "caesars":    "Caesars",
+    "betmgm":     "BetMGM",
+    "pointsbet":  "Fanatics",
+}
+
+
 def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
@@ -314,7 +325,7 @@ def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
                 "books": {},
             }
         book = r.get("book") or ""
-        if book:
+        if book and book in _BOOK_DISPLAY:
             pair_data[key]["books"][book] = {
                 "p1_odds": r.get("p1_book_odds"),
                 "p2_odds": r.get("p2_book_odds"),
@@ -336,10 +347,11 @@ def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
                 seen_books.add(b)
                 all_books.append(b)
 
-    # Book filter dropdown + JS
+    # Book filter dropdown + JS (canonical order, display names)
     options = '<option value="all">All Books</option>\n'
-    for b in all_books:
-        options += f'      <option value="{b}">{b.title()}</option>\n'
+    for b in _BOOK_DISPLAY:
+        if b in seen_books:
+            options += f'      <option value="{b}">{_BOOK_DISPLAY[b]}</option>\n'
 
     filter_html = f"""<div class="filter-bar">
   <label for="bookFilter">Filter by book:</label>
@@ -373,14 +385,18 @@ function filterByBook(book) {{
         p2_has_edge = p2e is not None and p2e >= min_edge
         books_attr = " ".join(v["books"].keys())
 
-        # Book columns
+        # Book columns (in canonical order)
         book_cols_html = ""
-        for book, bdata in v["books"].items():
+        for book in _BOOK_DISPLAY:
+            bdata = v["books"].get(book)
+            if bdata is None:
+                continue
+            label = _BOOK_DISPLAY[book]
             p1_line = _fmt_odds(bdata["p1_odds"])
             p2_line = _fmt_odds(bdata["p2_odds"])
             book_cols_html += f"""
       <div class="book-col" data-book="{book}">
-        <div class="book-label">{book.title()}</div>
+        <div class="book-label">{label}</div>
         <div class="book-line">{p1_line}</div>
         <div class="book-line">{p2_line}</div>
       </div>"""
