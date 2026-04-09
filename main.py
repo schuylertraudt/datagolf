@@ -496,7 +496,7 @@ def display_rankings(
             cells.append(fmt(row.get("composite_score"), signed=True))
             for col in extra_cols:
                 v = row.get(col)
-                cells.append(str(int(v)) if v is not None else "[dim]-[/dim]")
+                cells.append(str(int(v)) if pd.notna(v) else "[dim]-[/dim]")
         else:
             if not pre_tournament:
                 cells += [fmt_pos(row.get("position")), fmt_pos(row.get("thru"))]
@@ -518,7 +518,7 @@ def display_rankings(
                 cells.append(fmt_pct(row.get("edge"), signed=True))
             for col in extra_cols:
                 v = row.get(col)
-                cells.append(str(int(v)) if v is not None else "[dim]-[/dim]")
+                cells.append(str(int(v)) if pd.notna(v) else "[dim]-[/dim]")
 
         t.add_row(*cells)
 
