@@ -211,8 +211,19 @@ class PGATourStats:
         except Exception as exc:
             return [], str(exc)
 
-    def _fetch_stat(self, stat_id: str) -> tuple:
+    def _fetch_stat(self, stat_id: str, year: int = None) -> tuple:
         """Fetch raw stat entries for a stat. Returns (rows, title)."""
+        # On first call, introspect the statDetails query arguments
+        intro_q = {"query": '{ __type(name: "Query") { fields { name args { name type { name kind ofType { name } } } } } }'}
+        try:
+            ir = self.session.post(_API_URL, json=intro_q, timeout=self.timeout)
+            fields = ((ir.json().get("data") or {}).get("__type") or {}).get("fields") or []
+            sd = next((f for f in fields if f["name"] == "statDetails"), None)
+            if sd:
+                print(f"  [pgatour] statDetails args: {[(a['name'], a['type']) for a in sd.get('args', [])]}")
+        except Exception as e:
+            print(f"  [pgatour] introspect error: {e}")
+
         payload = {
             "query": _STAT_QUERY,
             "variables": {"tourCode": "R", "statId": stat_id},
