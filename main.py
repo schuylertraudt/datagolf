@@ -226,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Column to sort by (default: composite)")
     p.add_argument("--all", action="store_true",
                    help="Show all players, not just top N")
+    p.add_argument("--compact", action="store_true",
+                   help="Compact view: hide SG breakdown, show rank/player/score/aux stats only")
 
     wg = p.add_argument_group(
         "Weight overrides",
@@ -424,6 +426,7 @@ def display_rankings(
     show_edge: bool,
     sort_col: str,
     pre_tournament: bool = False,
+    compact: bool = False,
 ):
     # Re-sort if needed
     sort_map = {
@@ -439,6 +442,8 @@ def display_rankings(
 
     display_df = df if top_n == 0 else df.head(top_n)
 
+    extra_cols = [c for c in df.columns if c.endswith(" Rk")]
+
     t = Table(
         title=None,
         box=box.SIMPLE_HEAD,
@@ -448,50 +453,67 @@ def display_rankings(
         expand=False,
     )
     t.add_column("#", justify="right", width=4, style="dim")
-    t.add_column("Player", min_width=24, no_wrap=True)
-    if not pre_tournament:
-        t.add_column("Pos",  justify="center", width=5)
-        t.add_column("Thru", justify="center", width=5)
-    t.add_column("Win%",    justify="right", min_width=7)
-    t.add_column("DG Odds", justify="right", min_width=8)
-    if "model_win_prob" in df.columns:
-        t.add_column("My Odds", justify="right", min_width=8)
-    t.add_column("SG:OTT", justify="right", min_width=7)
-    t.add_column("SG:APP", justify="right", min_width=7)
-    t.add_column("SG:ARG", justify="right", min_width=7)
-    t.add_column("SG:PUT", justify="right", min_width=7)
-    t.add_column("SG:TOT", justify="right", min_width=7)
-    t.add_column("Score",   justify="right", min_width=7)
-    if show_edge:
-        t.add_column("Edge", justify="right", min_width=8)
-    # Extra PGA Tour stat rank columns (display-only)
-    extra_cols = [c for c in df.columns if c.endswith(" Rk")]
-    for col in extra_cols:
-        t.add_column(col, justify="right", min_width=6)
+    t.add_column("Player", min_width=18 if compact else 24, no_wrap=True)
+
+    if compact:
+        # Compact: rank, player, my odds, score, aux stat ranks only
+        if "model_win_prob" in df.columns:
+            t.add_column("My Odds", justify="right", min_width=8)
+        t.add_column("Score", justify="right", min_width=7)
+        for col in extra_cols:
+            t.add_column(col, justify="right", min_width=6)
+    else:
+        if not pre_tournament:
+            t.add_column("Pos",  justify="center", width=5)
+            t.add_column("Thru", justify="center", width=5)
+        t.add_column("Win%",    justify="right", min_width=7)
+        t.add_column("DG Odds", justify="right", min_width=8)
+        if "model_win_prob" in df.columns:
+            t.add_column("My Odds", justify="right", min_width=8)
+        t.add_column("SG:OTT", justify="right", min_width=7)
+        t.add_column("SG:APP", justify="right", min_width=7)
+        t.add_column("SG:ARG", justify="right", min_width=7)
+        t.add_column("SG:PUT", justify="right", min_width=7)
+        t.add_column("SG:TOT", justify="right", min_width=7)
+        t.add_column("Score",   justify="right", min_width=7)
+        if show_edge:
+            t.add_column("Edge", justify="right", min_width=8)
+        for col in extra_cols:
+            t.add_column(col, justify="right", min_width=6)
 
     for _, row in display_df.iterrows():
         cells = [str(int(row["rank"])), str(row.get("player_name") or "")]
-        if not pre_tournament:
-            cells += [fmt_pos(row.get("position")), fmt_pos(row.get("thru"))]
-        cells += [
-            fmt_pct(row.get("win_prob")),
-            prob_to_american(row.get("win_prob")),
-        ]
-        if "model_win_prob" in display_df.columns:
-            cells.append(prob_to_american(row.get("model_win_prob")))
-        cells += [
-            fmt(row.get("sg_ott"), signed=True),
-            fmt(row.get("sg_app"), signed=True),
-            fmt(row.get("sg_arg"), signed=True),
-            fmt(row.get("sg_putt"), signed=True),
-            fmt(row.get("sg_total"), signed=True),
-            fmt(row.get("composite_score"), signed=True),
-        ]
-        if show_edge:
-            cells.append(fmt_pct(row.get("edge"), signed=True))
-        for col in extra_cols:
-            v = row.get(col)
-            cells.append(str(int(v)) if v is not None else "[dim]-[/dim]")
+
+        if compact:
+            if "model_win_prob" in display_df.columns:
+                cells.append(prob_to_american(row.get("model_win_prob")))
+            cells.append(fmt(row.get("composite_score"), signed=True))
+            for col in extra_cols:
+                v = row.get(col)
+                cells.append(str(int(v)) if v is not None else "[dim]-[/dim]")
+        else:
+            if not pre_tournament:
+                cells += [fmt_pos(row.get("position")), fmt_pos(row.get("thru"))]
+            cells += [
+                fmt_pct(row.get("win_prob")),
+                prob_to_american(row.get("win_prob")),
+            ]
+            if "model_win_prob" in display_df.columns:
+                cells.append(prob_to_american(row.get("model_win_prob")))
+            cells += [
+                fmt(row.get("sg_ott"), signed=True),
+                fmt(row.get("sg_app"), signed=True),
+                fmt(row.get("sg_arg"), signed=True),
+                fmt(row.get("sg_putt"), signed=True),
+                fmt(row.get("sg_total"), signed=True),
+                fmt(row.get("composite_score"), signed=True),
+            ]
+            if show_edge:
+                cells.append(fmt_pct(row.get("edge"), signed=True))
+            for col in extra_cols:
+                v = row.get(col)
+                cells.append(str(int(v)) if v is not None else "[dim]-[/dim]")
+
         t.add_row(*cells)
 
     console.print(t)
@@ -674,6 +696,7 @@ def main():
         show_edge=market_odds is not None,
         sort_col=args.sort,
         pre_tournament=args.pre_tournament,
+        compact=args.compact,
     )
 
     # --- Value summary ---
