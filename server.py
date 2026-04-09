@@ -255,14 +255,17 @@ def _fetch(settings: dict) -> dict:
     # Matchups
     matchups_html = ""
     matchup_round = ""
+    matchup_no_data = False
     try:
         mu_raw = client.get_matchups(tour=tour)
         matchup_round = str(mu_raw.get("round_num") or mu_raw.get("round") or "")
         mu_df = parse_matchups(mu_raw, model_df=df)
         if not mu_df.empty:
-            matchups_html = _matchups_to_html(mu_df)
+            matchups_html = _matchups_to_html(mu_df, matchup_round=matchup_round)
+        else:
+            matchup_no_data = True
     except Exception:
-        pass
+        matchup_no_data = True
 
     event_name = (
         (predictions_raw or {}).get("event_name")
@@ -277,6 +280,7 @@ def _fetch(settings: dict) -> dict:
         "has_dk": bool(dk_map),
         "matchups_html": matchups_html,
         "matchup_round": matchup_round,
+        "matchup_no_data": matchup_no_data,
         "regression_html": regression_html,
         "live_round": live_round,
         "weights": weights,
@@ -444,7 +448,8 @@ def _regression_to_html(reg_df, live_round: int) -> str:
     </table>"""
 
 
-
+def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") -> str:
+    round_label = f"Round {matchup_round}" if matchup_round else "this round"
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
     # Group rows by matchup pair, collecting all books
@@ -472,7 +477,7 @@ def _regression_to_html(reg_df, live_round: int) -> str:
         sorted_pairs = [(k, v) for k, v in sorted_pairs if v["max_edge"] >= min_edge]
 
     if not sorted_pairs:
-        return "<p class='dim'>No matchups with edge ≥ 5%. Try refreshing after round starts.</p>"
+        return f"<p class='dim'>No matchups with edge ≥ 5% for {round_label}. Lines may not be posted yet, or the market is well-priced.</p>"
 
     # Collect books in order of first appearance
     all_books: list = []
@@ -685,8 +690,10 @@ MATCHUPS_TEMPLATE = """<!DOCTYPE html>
 
   {% if matchups_html %}
   {{ matchups_html | safe }}
-  {% else %}
-  <p class="meta">No matchup data available — check back once the round starts.</p>
+  {% elif matchup_no_data and matchup_round == "1" %}
+  <p class="meta">Round 1 is underway — Round 2 matchup lines haven't been posted yet. Check back after the round completes.</p>
+  {% elif matchup_no_data %}
+  <p class="meta">No matchup data available for this round yet. Try refreshing once the round starts.</p>
   {% endif %}
 
   <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
@@ -731,6 +738,7 @@ def matchups():
         error=data.get("error"),
         matchups_html=data.get("matchups_html", ""),
         matchup_round=data.get("matchup_round", ""),
+        matchup_no_data=data.get("matchup_no_data", False),
     )
 
 
