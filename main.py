@@ -113,27 +113,47 @@ def run_setup_stats():
     console.print("[cyan]Fetching PGA Tour stat catalog…[/cyan]")
     categories, err = pga.get_stat_categories()
 
-    if not categories:
-        console.print(f"[dim]API catalog unavailable ({err}) — using built-in list.[/dim]")
+    if categories:
+        total = sum(len(c["stats"]) for c in categories)
+        console.print(f"[green]Loaded {total} stats from live API.[/green]")
+    else:
+        console.print(f"[yellow]Live catalog unavailable ({err}) — using built-in list.[/yellow]")
         categories = CURATED_STATS
 
-    selected = []
-
-    # Build a flat numbered list across all categories
-    idx = 1
-    idx_map = {}
+    # Build a flat index of all stats
+    all_stats: list[dict] = []
     for cat in categories:
-        console.print(f"\n[bold]{cat['category']}[/bold]")
         for s in cat["stats"]:
-            console.print(f"  [dim]{idx:>3}[/dim]  {s['title']:<45} [dim]{s['id']}[/dim]")
-            idx_map[idx] = {"id": s["id"], "label": s["title"]}
-            idx += 1
+            all_stats.append({"id": s["id"], "title": s["title"], "category": cat["category"]})
+
+    def _show_stats(stats_to_show):
+        cur_cat = None
+        for i, s in enumerate(stats_to_show, 1):
+            if s["category"] != cur_cat:
+                cur_cat = s["category"]
+                console.print(f"\n[bold]{cur_cat}[/bold]")
+            console.print(f"  [dim]{i:>3}[/dim]  {s['title']:<50} [dim]{s['id']}[/dim]")
 
     console.print()
-    console.print("[dim]Enter a number from the list, or paste any stat ID from pgatour.com/stats/detail/<ID>.[/dim]")
-    console.print("[dim]Leave blank and press Enter when done (minimum 1 stat).[/dim]")
+    console.print("[dim]Type a keyword to filter, or press Enter to show all stats:[/dim]")
+    search = Prompt.ask("  Search", default="", console=console).strip().lower()
+    if search:
+        filtered = [s for s in all_stats if search in s["title"].lower() or search in s["category"].lower()]
+        if not filtered:
+            console.print(f"[yellow]No stats matched '{search}'. Showing all.[/yellow]")
+            filtered = all_stats
+    else:
+        filtered = all_stats
+
+    idx_map = {i: s for i, s in enumerate(filtered, 1)}
+    _show_stats(filtered)
+
+    console.print()
+    console.print("[dim]Enter a number from the list above, or type a stat ID from pgatour.com/stats/detail/<ID>.[/dim]")
+    console.print("[dim]Press Enter on a blank line when done (at least 1 stat required).[/dim]")
     console.print()
 
+    selected = []
     i = 1
     while True:
         raw = Prompt.ask(f"  Stat {i} [dim](blank to finish)[/dim]", default="", console=console).strip()
@@ -145,16 +165,15 @@ def run_setup_stats():
         if raw.isdigit() and int(raw) in idx_map:
             chosen = idx_map[int(raw)]
             label = Prompt.ask(
-                f"    Label for '{chosen['label']}'",
-                default=chosen["label"],
+                f"    Label for '{chosen['title']}'",
+                default=chosen["title"],
                 console=console,
             )
             selected.append({"id": chosen["id"], "label": label})
         else:
-            # Raw stat ID entered directly
-            # Try to look up the title from the API
+            # Raw stat ID — look up title from API
             try:
-                rows, title = pga._fetch_stat(raw)
+                _, title = pga._fetch_stat(raw)
                 default_label = title or raw
             except Exception:
                 default_label = raw
