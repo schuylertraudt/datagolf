@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Introspect promising stat catalog fields."""
+"""Dig into OverviewStats and StatCategory to find stat catalog."""
 import json
 import requests
 
@@ -18,41 +18,41 @@ def gql(query, variables=None):
     resp.raise_for_status()
     return resp.json()
 
-def introspect_field(field_name):
-    """Get args and return type for a Query field."""
-    d = gql("""{ __type(name: "Query") { fields { name args { name type { name kind ofType { name kind } } } returnType: type { name kind ofType { name kind ofType { name kind } } } } } }""")
-    fields = (d.get("data") or {}).get("__type", {}).get("fields") or []
-    for f in fields:
-        if f["name"] == field_name:
-            return f
-    return None
+def type_fields(type_name):
+    d = gql(f'{{ __type(name: "{type_name}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} enumValues {{ name }} }} }}')
+    t = (d.get("data") or {}).get("__type") or {}
+    return t.get("fields") or [], t.get("enumValues") or []
 
-def introspect_type(type_name):
-    """Get fields of a named type."""
-    d = gql(f'{{ __type(name: "{type_name}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
-    return (d.get("data") or {}).get("__type", {})
+# 1. OverviewStats fields
+print("=== OverviewStats fields ===")
+fields, _ = type_fields("OverviewStats")
+for f in fields:
+    print(f"  {f['name']}: {f['type']}")
 
-for candidate in ["statOverview", "allTimeRecordCategories", "statLeaders"]:
-    print(f"\n=== {candidate} ===")
-    info = introspect_field(candidate)
-    if info:
-        print(f"  args: {[(a['name'], a['type']) for a in info.get('args', [])]}")
-        print(f"  returnType: {info.get('returnType')}")
-    else:
-        print("  not found")
+# 2. StatCategory enum values
+print("\n=== StatCategory enum values ===")
+_, enum_vals = type_fields("StatCategory")
+categories = [v["name"] for v in enum_vals]
+print(categories)
 
-# Try calling statOverview with no args to see what happens
-print("\n=== statOverview call (no args) ===")
+# 3. Call statOverview with tourCode=R
+print("\n=== statOverview(tourCode: R) — first 800 chars ===")
 try:
-    d = gql("{ statOverview { __typename } }")
-    print(json.dumps(d, indent=2)[:600])
+    d = gql('{ statOverview(tourCode: R) { __typename } }')
+    # Now get actual fields
+    if fields:
+        first_field = fields[0]["name"]
+        d2 = gql(f'{{ statOverview(tourCode: R) {{ {first_field} }} }}')
+        print(json.dumps(d2, indent=2)[:800])
 except Exception as e:
     print(f"error: {e}")
 
-# Try allTimeRecordCategories
-print("\n=== allTimeRecordCategories call ===")
-try:
-    d = gql("{ allTimeRecordCategories { __typename } }")
-    print(json.dumps(d, indent=2)[:600])
-except Exception as e:
-    print(f"error: {e}")
+# 4. Try statLeaders with first category
+if categories:
+    cat = categories[0]
+    print(f"\n=== statLeaders(tourCode: R, category: {cat}) — first 800 chars ===")
+    try:
+        d = gql(f'{{ statLeaders(tourCode: R, category: {cat}) {{ title stats {{ statId statTitle }} }} }}')
+        print(json.dumps(d, indent=2)[:800])
+    except Exception as e:
+        print(f"error: {e}")
