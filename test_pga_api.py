@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Introspect PGA Tour GraphQL API to find stat catalog query — run and share output."""
+"""Introspect promising stat catalog fields."""
 import json
 import requests
 
@@ -18,23 +18,41 @@ def gql(query, variables=None):
     resp.raise_for_status()
     return resp.json()
 
-# 1. All Query-level fields
-print("=== All Query fields ===")
-d = gql("{ __type(name: \"Query\") { fields { name } } }")
-fields = [f["name"] for f in (d.get("data") or {}).get("__type", {}).get("fields") or []]
-for f in sorted(fields):
-    print(" ", f)
+def introspect_field(field_name):
+    """Get args and return type for a Query field."""
+    d = gql("""{ __type(name: "Query") { fields { name args { name type { name kind ofType { name kind } } } returnType: type { name kind ofType { name kind ofType { name kind } } } } } }""")
+    fields = (d.get("data") or {}).get("__type", {}).get("fields") or []
+    for f in fields:
+        if f["name"] == field_name:
+            return f
+    return None
 
-# 2. Look for any field that sounds like a stat catalog
-stat_fields = [f for f in fields if "stat" in f.lower() or "categor" in f.lower()]
-print(f"\n=== Stat-related fields: {stat_fields} ===")
+def introspect_type(type_name):
+    """Get fields of a named type."""
+    d = gql(f'{{ __type(name: "{type_name}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
+    return (d.get("data") or {}).get("__type", {})
 
-# 3. Try statLeaderboards or similar if present
-for candidate in ["statLeaderboard", "statLeaderboards", "stats", "statList", "playerStats"]:
-    if candidate in fields:
-        print(f"\n=== Trying {candidate} ===")
-        try:
-            d2 = gql(f"{{ {candidate} {{ __typename }} }}")
-            print(json.dumps(d2, indent=2)[:500])
-        except Exception as e:
-            print(f"  error: {e}")
+for candidate in ["statOverview", "allTimeRecordCategories", "statLeaders"]:
+    print(f"\n=== {candidate} ===")
+    info = introspect_field(candidate)
+    if info:
+        print(f"  args: {[(a['name'], a['type']) for a in info.get('args', [])]}")
+        print(f"  returnType: {info.get('returnType')}")
+    else:
+        print("  not found")
+
+# Try calling statOverview with no args to see what happens
+print("\n=== statOverview call (no args) ===")
+try:
+    d = gql("{ statOverview { __typename } }")
+    print(json.dumps(d, indent=2)[:600])
+except Exception as e:
+    print(f"error: {e}")
+
+# Try allTimeRecordCategories
+print("\n=== allTimeRecordCategories call ===")
+try:
+    d = gql("{ allTimeRecordCategories { __typename } }")
+    print(json.dumps(d, indent=2)[:600])
+except Exception as e:
+    print(f"error: {e}")
