@@ -89,7 +89,6 @@ query StatDetails($tourCode: TourCode!, $statId: String!, $year: Int) {
         rank
         stats {
           statValue
-          statId
         }
       }
     }
