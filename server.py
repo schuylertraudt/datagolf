@@ -263,7 +263,8 @@ def _rankings_to_html(df, extra_cols=None, dk_map=None) -> str:
         extra_cells = ""
         for col in extra_cols:
             v = r.get(col)
-            cell_val = "<span class='dim'>-</span>" if v is None else str(int(v))
+            import math as _math
+            cell_val = "<span class='dim'>-</span>" if (v is None or (isinstance(v, float) and _math.isnan(v))) else str(int(v))
             extra_cells += f"<td>{cell_val}</td>"
 
         rows.append(f"""
