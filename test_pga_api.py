@@ -1,29 +1,10 @@
 #!/usr/bin/env python3
-"""Quick diagnostic for PGA Tour API — run and share output."""
+"""Introspect PGA Tour GraphQL API to find stat catalog query — run and share output."""
 import json
 import requests
 
 _API_URL = "https://orchestrator.pgatour.com/graphql"
 _API_KEY  = "da2-gsrx5bibzbb4njvhl7t37wqyl4"
-
-_STAT_QUERY = """
-query StatDetails($tourCode: TourCode!, $statId: String!, $year: Int) {
-  statDetails(tourCode: $tourCode, statId: $statId, year: $year) {
-    statId
-    statTitle
-    rows {
-      ... on StatDetailsPlayer {
-        playerName
-        rank
-        stats {
-          statValue
-          statId
-        }
-      }
-    }
-  }
-}
-"""
 
 session = requests.Session()
 session.headers.update({
@@ -32,32 +13,28 @@ session.headers.update({
     "Content-Type": "application/json",
 })
 
-def fetch(stat_id, year=None):
-    variables = {"tourCode": "R", "statId": stat_id}
-    if year is not None:
-        variables["year"] = year
-    resp = session.post(_API_URL, json={"query": _STAT_QUERY, "variables": variables}, timeout=20)
+def gql(query, variables=None):
+    resp = session.post(_API_URL, json={"query": query, "variables": variables or {}}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
-stat_id = "02335"  # Par 5 Scoring Average
-print("=== year=2026 ===")
-d = fetch(stat_id, year=2026)
-details = (d.get("data") or {}).get("statDetails") or {}
-rows = details.get("rows") or []
-print(f"statTitle: {details.get('statTitle')}")
-print(f"total rows: {len(rows)}")
-print(f"first 2 rows raw: {json.dumps(rows[:2], indent=2)}")
+# 1. All Query-level fields
+print("=== All Query fields ===")
+d = gql("{ __type(name: \"Query\") { fields { name } } }")
+fields = [f["name"] for f in (d.get("data") or {}).get("__type", {}).get("fields") or []]
+for f in sorted(fields):
+    print(" ", f)
 
-print()
-print("=== no year (default) ===")
-d2 = fetch(stat_id)
-details2 = (d2.get("data") or {}).get("statDetails") or {}
-rows2 = details2.get("rows") or []
-print(f"statTitle: {details2.get('statTitle')}")
-print(f"total rows: {len(rows2)}")
-print(f"first 2 rows raw: {json.dumps(rows2[:2], indent=2)}")
+# 2. Look for any field that sounds like a stat catalog
+stat_fields = [f for f in fields if "stat" in f.lower() or "categor" in f.lower()]
+print(f"\n=== Stat-related fields: {stat_fields} ===")
 
-print()
-print("=== errors (year=2026) ===")
-print(d.get("errors"))
+# 3. Try statLeaderboards or similar if present
+for candidate in ["statLeaderboard", "statLeaderboards", "stats", "statList", "playerStats"]:
+    if candidate in fields:
+        print(f"\n=== Trying {candidate} ===")
+        try:
+            d2 = gql(f"{{ {candidate} {{ __typename }} }}")
+            print(json.dumps(d2, indent=2)[:500])
+        except Exception as e:
+            print(f"  error: {e}")
