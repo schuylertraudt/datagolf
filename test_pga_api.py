@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find stat catalog via statOverview.stats and StatLeaderCategory fields."""
+"""Introspect OverviewStat and StatCategoryConfig to find stat ID/title fields."""
 import json
 import requests
 
@@ -22,39 +22,32 @@ def type_fields(type_name):
     d = gql(f'{{ __type(name: "{type_name}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
     return [(f["name"], f["type"]) for f in ((d.get("data") or {}).get("__type") or {}).get("fields") or []]
 
-# 1. StatLeaderCategory actual fields
-print("=== StatLeaderCategory fields ===")
-for name, typ in type_fields("StatLeaderCategory"):
-    print(f"  {name}: {typ}")
+for t in ["OverviewStat", "StatCategoryConfig"]:
+    print(f"\n=== {t} fields ===")
+    for name, typ in type_fields(t):
+        print(f"  {name}: {typ}")
 
-# 2. statOverview with stats + categories
-print("\n=== statOverview(tourCode: R) with stats and categories — first 1000 chars ===")
-try:
-    d = gql('{ statOverview(tourCode: R) { stats { __typename } categories { __typename } } }')
-    print(json.dumps(d, indent=2)[:500])
-    # Get element types
-    stats_list = ((d.get("data") or {}).get("statOverview") or {}).get("stats") or []
-    cats_list  = ((d.get("data") or {}).get("statOverview") or {}).get("categories") or []
-    print(f"  stats count: {len(stats_list)}, first typename: {stats_list[0] if stats_list else 'none'}")
-    print(f"  categories count: {len(cats_list)}, first typename: {cats_list[0] if cats_list else 'none'}")
-except Exception as e:
-    print(f"error: {e}")
+# Also check subCategories element type inside StatLeaderCategory
+print("\n=== StatLeaderCategory.subCategories element type ===")
+d = gql('{ __type(name: "StatLeaderCategory") { fields { name type { name kind ofType { name kind ofType { name kind } } } } } }')
+fields = ((d.get("data") or {}).get("__type") or {}).get("fields") or []
+for f in fields:
+    if f["name"] in ("subCategories", "otherCategories"):
+        print(f"  {f['name']}: {f['type']}")
 
-# 3. Try to get stat IDs from statOverview.stats
-print("\n=== statOverview stats with id/title fields ===")
-for field_combo in ["statId statTitle", "id title", "statId name", "id name"]:
-    try:
-        d = gql(f'{{ statOverview(tourCode: R) {{ stats {{ {field_combo} }} }} }}')
-        if not d.get("errors"):
-            stats = ((d.get("data") or {}).get("statOverview") or {}).get("stats") or []
-            print(f"  Fields '{field_combo}' worked! {len(stats)} stats, first 3: {stats[:3]}")
-            break
-        else:
-            print(f"  Fields '{field_combo}': {d['errors'][0]['message'][:80]}")
-    except Exception as e:
-        print(f"  Fields '{field_combo}': error {e}")
+# Try calling statLeaders with subCategories
+print("\n=== statLeaders subCategories introspect ===")
+sub_type = None
+for f in fields:
+    if f["name"] == "subCategories":
+        t = f["type"]
+        # Drill down through NON_NULL/LIST wrappers
+        while t and not t.get("name"):
+            t = t.get("ofType")
+        sub_type = t.get("name") if t else None
+        break
 
-# 4. statLeaders with correct fields
-print("\n=== StatLeaderCategory fields (for statLeaders) ===")
-for name, typ in type_fields("StatLeaderCategory"):
-    print(f"  {name}: {typ}")
+if sub_type:
+    print(f"  subCategories element type: {sub_type}")
+    for name, typ in type_fields(sub_type):
+        print(f"    {name}: {typ}")
