@@ -238,6 +238,15 @@ def parse_dk_odds(raw: dict) -> pd.DataFrame:
         odds = ((1 - prob) / prob) * 100
         return f"+{int(round(odds))}"
 
+def prob_to_american(prob: float) -> str:
+    """Convert a win probability (0-1) to American odds string, e.g. '+350' or '-120'."""
+    if not prob or (isinstance(prob, float) and pd.isna(prob)) or prob <= 0 or prob >= 1:
+        return "[dim]-[/dim]"
+    if prob >= 0.5:
+        return str(int(round(-(prob / (1 - prob)) * 100)))
+    return f"+{int(round(((1 - prob) / prob) * 100))}"
+
+
 console = Console()
 
 
