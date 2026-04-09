@@ -211,7 +211,7 @@ class PGATourStats:
         except Exception as exc:
             return [], str(exc)
 
-    def _fetch_stat(self, stat_id: str, year: int = None) -> tuple:
+    def _fetch_stat(self, stat_id: str, year: int = None, _debug: bool = False) -> tuple:
         """Fetch raw stat entries for a stat + optional year. Returns (rows, title)."""
         variables = {"tourCode": "R", "statId": stat_id}
         if year is not None:
@@ -220,8 +220,16 @@ class PGATourStats:
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
+        if _debug:
+            import json as _json
+            details_raw = (data.get("data") or {}).get("statDetails")
+            print(f"  [debug] stat={stat_id} year={year} errors={data.get('errors')}")
+            print(f"  [debug] statDetails={_json.dumps(details_raw, indent=2)[:500] if details_raw else details_raw}")
         details = (data.get("data") or {}).get("statDetails") or {}
-        rows = [r for r in (details.get("rows") or []) if r.get("playerName")]
+        rows_raw = details.get("rows") or []
+        if _debug:
+            print(f"  [debug] total rows={len(rows_raw)}, first raw row={rows_raw[0] if rows_raw else 'NONE'}")
+        rows = [r for r in rows_raw if r.get("playerName")]
         return rows, details.get("statTitle", "")
 
     def get_combined_stat(
@@ -239,8 +247,9 @@ class PGATourStats:
         Returns DataFrame with columns:
             player_name, stat_id, label, combined_rank, cur_rank, cur_value, prev_rank, prev_value
         """
-        cur_entries,  title = self._fetch_stat(stat_id)            # no year = current season default
-        prev_entries, _     = self._fetch_stat(stat_id, year=self._current_year - 1)
+        debug = getattr(self, "_debug", False)
+        cur_entries,  title = self._fetch_stat(stat_id, _debug=debug)
+        prev_entries, _     = self._fetch_stat(stat_id, year=self._current_year - 1, _debug=debug)
 
         cur_df  = _entries_to_df(cur_entries,  suffix="cur")
         prev_df = _entries_to_df(prev_entries, suffix="prev")

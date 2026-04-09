@@ -63,6 +63,7 @@ def fetch_weekly_stats(stat_configs, debug: bool = False) -> dict[str, pd.DataFr
     if not stat_configs:
         return {}
     client = PGATourStats()
+    client._debug = debug
     results = {}
     for s in stat_configs:
         try:
