@@ -188,6 +188,70 @@ def _fetch(settings: dict) -> dict:
     except Exception:
         pass
 
+    # Live tournament stats — putting regression signal (Rounds 2+)
+    # Identifies historically strong putters who are cold this week but striking it well.
+    live_round = 0
+    regression_html = ""
+    _PUTT_REGRESSION_FACTOR = 0.10  # max ~0.20 stroke boost to matchup_sg
+    try:
+        import pandas as _pd3
+        live_raw = client.get_live_tournament_stats(tour=tour, round="event", display="value")
+        live_round = int(live_raw.get("round_num") or live_raw.get("round") or 0)
+
+        # Parse live sg_putt and sg_t2g per player
+        live_sg: dict = {}
+        for p in (live_raw.get("live_stats") or []):
+            name = (p.get("player_name") or "").strip()
+            if not name:
+                continue
+            if "stats" in p and isinstance(p["stats"], list):
+                sg_map: dict = {}
+                for s in p["stats"]:
+                    k = s.get("stat") or s.get("stat_name") or ""
+                    try:
+                        sg_map[k] = float(s.get("value") or 0)
+                    except Exception:
+                        pass
+                live_sg[name] = {"live_sg_putt": sg_map.get("sg_putt"), "live_sg_t2g": sg_map.get("sg_t2g")}
+            else:
+                def _sf(v):
+                    try: return float(v)
+                    except Exception: return None
+                live_sg[name] = {"live_sg_putt": _sf(p.get("sg_putt")), "live_sg_t2g": _sf(p.get("sg_t2g"))}
+
+        if live_sg and live_round >= 2:
+            live_df_rows = [
+                {"player_name": n, "live_sg_putt": v["live_sg_putt"], "live_sg_t2g": v["live_sg_t2g"]}
+                for n, v in live_sg.items()
+            ]
+            live_merge = _pd3.DataFrame(live_df_rows)
+            df = df.merge(live_merge, on="player_name", how="left")
+
+            # putt_gap: positive means putting worse than historical average
+            df["putt_gap_raw"] = df["sg_putt"] - df["live_sg_putt"]
+
+            # Apply boost to matchup_sg (only for positive gaps; gated by live T2G)
+            putt_gap_pos = df["putt_gap_raw"].clip(lower=0)
+            # t2g_gate: 0→0, +0.5 SG T2G→1.0 (capped)
+            t2g_gate = (df["live_sg_t2g"].fillna(0).clip(lower=0) / 0.5).clip(upper=1.0)
+            boost = _PUTT_REGRESSION_FACTOR * putt_gap_pos * t2g_gate
+            df["matchup_sg"] = df["matchup_sg"] + boost.fillna(0)
+
+            # Regression targets: historically good putters with a meaningful gap
+            reg = df[
+                (df["putt_gap_raw"].fillna(0) > 0.3) &       # meaningfully underperforming
+                (df["sg_putt"].fillna(-99)    > 0.0)          # historically above-average putter
+            ].copy()
+            reg["regression_signal"] = (
+                reg["putt_gap_raw"].clip(lower=0) *
+                reg["live_sg_t2g"].fillna(0).clip(lower=0.1)  # small floor so gap alone registers
+            )
+            reg = reg.sort_values("regression_signal", ascending=False).head(10)
+            if not reg.empty:
+                regression_html = _regression_to_html(reg, live_round)
+    except Exception:
+        pass
+
     # Matchups
     matchups_html = ""
     matchup_round = ""
@@ -213,6 +277,8 @@ def _fetch(settings: dict) -> dict:
         "has_dk": bool(dk_map),
         "matchups_html": matchups_html,
         "matchup_round": matchup_round,
+        "regression_html": regression_html,
+        "live_round": live_round,
         "weights": weights,
         "history": history,
     }
@@ -333,7 +399,52 @@ _BOOK_DISPLAY = {
 }
 
 
-def _matchups_to_html(mu_df, min_edge: float = 0.05) -> str:
+def _regression_to_html(reg_df, live_round: int) -> str:
+    """Render the putting regression targets table."""
+    import math as _math
+    rows = []
+    for _, r in reg_df.iterrows():
+        hist_p = r.get("sg_putt")
+        live_p = r.get("live_sg_putt")
+        gap    = r.get("putt_gap_raw", 0)
+        t2g    = r.get("live_sg_t2g")
+
+        def _safe(v):
+            return v is not None and not (isinstance(v, float) and _math.isnan(v))
+
+        live_p_html = (
+            f"<span class='neg'>{live_p:+.2f}</span>"
+            if _safe(live_p) and _safe(hist_p) and live_p < hist_p
+            else _num(live_p, signed=True)
+        )
+        gap_html = f"<span class='pos'>+{gap:.2f}</span>" if gap and gap > 0 else _num(gap, signed=True)
+        t2g_html = (
+            f"<span class='pos'>{t2g:+.2f}</span>"
+            if _safe(t2g) and t2g > 0
+            else _num(t2g, signed=True)
+        )
+
+        rows.append(f"""
+        <tr>
+          <td class="name">{r['player_name']}</td>
+          <td>{_num(hist_p, signed=True)}</td>
+          <td>{live_p_html}</td>
+          <td>{gap_html}</td>
+          <td>{t2g_html}</td>
+        </tr>""")
+
+    return f"""
+    <div class="reg-header">Putting Regression Targets — Round {live_round}</div>
+    <p class="reg-meta">Historically strong putters underperforming with the flat stick this week, while creating birdie looks tee-to-green. These players are factored into matchup edges.</p>
+    <table class="reg-table">
+      <thead><tr>
+        <th>Player</th><th>Hist SG:P</th><th>Live SG:P</th><th>Gap</th><th>Live T2G</th>
+      </tr></thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>"""
+
+
+
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
     # Group rows by matchup pair, collecting all books
@@ -499,6 +610,11 @@ _CSS = """
   .model-col .book-line { color: #90cdf4; }
   .edge-col .book-line { font-weight: 500; }
   span.neg { color: #4a5568; }
+  .reg-header { font-size: 14px; color: #63b3ed; margin: 28px 0 4px; font-weight: 600; }
+  .reg-meta { color: #718096; font-size: 11px; margin-bottom: 12px; }
+  .reg-table { margin-bottom: 28px; width: auto; }
+  .reg-table th, .reg-table td { padding: 5px 14px; }
+  .reg-table th:first-child, .reg-table td:first-child { text-align: left; }
 """
 
 RANKINGS_TEMPLATE = """<!DOCTYPE html>
@@ -522,6 +638,10 @@ RANKINGS_TEMPLATE = """<!DOCTYPE html>
     <a class="nav-btn" href="/matchups">Matchups</a>
     <a class="nav-btn" href="/refresh">↻ Refresh</a>
   </nav>
+
+  {% if regression_html %}
+  {{ regression_html | safe }}
+  {% endif %}
 
   <table>
     <thead><tr>
@@ -596,6 +716,7 @@ def index():
         rankings_html=data.get("rankings_html", ""),
         weights_str=weights_str,
         extra_col_headers=data.get("extra_col_headers", []),
+        regression_html=data.get("regression_html", ""),
     )
 
 
