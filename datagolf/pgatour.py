@@ -97,17 +97,27 @@ query StatDetails($tourCode: TourCode!, $statId: String!, $year: Int) {
 """
 
 
-_CATEGORIES_QUERY = """
-query StatCategories($tourCode: TourCode!) {
-  statCategories(tourCode: $tourCode) {
-    displayName
-    stats {
-      statId
-      statTitle
+_STAT_LEADERS_QUERY = """
+query StatLeaders($tourCode: TourCode!, $category: StatCategory!) {
+  statLeaders(tourCode: $tourCode, category: $category) {
+    categoryHeader
+    subCategories {
+      subCategoryName
+      stats {
+        statId
+        statTitle
+      }
     }
   }
 }
 """
+
+# All StatCategory enum values exposed by the PGA Tour GraphQL API
+_STAT_CATEGORIES = [
+    "STROKES_GAINED", "OFF_TEE", "APPROACH_GREEN", "AROUND_GREEN",
+    "PUTTING", "SCORING", "MONEY_FINISHES", "POINTS_RANKINGS",
+    "STREAKS", "FACTS_AND_FIGURES", "PACE_OF_PLAY",
+]
 
 
 # Curated fallback stat catalog — used when the API doesn't return categories.
@@ -177,38 +187,43 @@ class PGATourStats:
 
     def get_stat_categories(self) -> tuple[list[dict], str]:
         """
-        Fetch the full stat catalog grouped by category.
+        Fetch the full stat catalog grouped by category using statLeaders.
+        Queries all StatCategory enum values and deduplicates stat IDs.
         Returns (categories, error_message). categories is empty on failure.
         """
-        payload = {
-            "query": _CATEGORIES_QUERY,
-            "variables": {"tourCode": "R"},
-        }
-        try:
-            resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            errors = data.get("errors")
-            if errors:
-                return [], f"GraphQL error: {errors[0].get('message', errors)}"
-            raw = data.get("data", {}).get("statCategories") or []
-            if not raw:
-                return [], "statCategories returned empty — query may not be supported"
-            categories = [
-                {
-                    "category": cat.get("displayName", "Other"),
-                    "stats": [
-                        {"id": s["statId"], "title": s["statTitle"]}
-                        for s in (cat.get("stats") or [])
-                        if s.get("statId") and s.get("statTitle")
-                    ],
-                }
-                for cat in raw
-                if cat.get("stats")
-            ]
-            return categories, ""
-        except Exception as exc:
-            return [], str(exc)
+        categories = []
+        last_err = ""
+        for cat_enum in _STAT_CATEGORIES:
+            payload = {
+                "query": _STAT_LEADERS_QUERY,
+                "variables": {"tourCode": "R", "category": cat_enum},
+            }
+            try:
+                resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                errors = data.get("errors")
+                if errors:
+                    last_err = errors[0].get("message", str(errors))
+                    continue
+                leader_cat = (data.get("data") or {}).get("statLeaders") or {}
+                cat_header = leader_cat.get("categoryHeader") or cat_enum.replace("_", " ").title()
+                seen = set()
+                stats = []
+                for sub in (leader_cat.get("subCategories") or []):
+                    for s in (sub.get("stats") or []):
+                        sid = s.get("statId")
+                        title = s.get("statTitle")
+                        if sid and title and sid not in seen:
+                            seen.add(sid)
+                            stats.append({"id": sid, "title": title})
+                if stats:
+                    categories.append({"category": cat_header, "stats": stats})
+            except Exception as exc:
+                last_err = str(exc)
+        if not categories:
+            return [], last_err or "No categories returned"
+        return categories, ""
 
     def _fetch_stat(self, stat_id: str, year: int = None, _debug: bool = False) -> tuple:
         """Fetch raw stat entries for a stat + optional year. Returns (rows, title)."""
