@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build full stat catalog via statLeaders across all StatCategory enum values."""
+"""Get StatLeaderSubCategory.stats element type and build full catalog."""
 import json
 import requests
 
@@ -18,53 +18,47 @@ def gql(query, variables=None):
     resp.raise_for_status()
     return resp.json()
 
-CATEGORIES = [
-    'APPROACH_GREEN', 'AROUND_GREEN', 'MONEY_FINISHES', 'OFF_TEE',
-    'POINTS_RANKINGS', 'PUTTING', 'SCORING', 'STREAKS',
-    'STROKES_GAINED', 'FACTS_AND_FIGURES', 'PACE_OF_PLAY'
-]
-
-# 1. Find subCategories element type
-print("=== Introspect subCategories element type ===")
+# 1. Get stats element type inside StatLeaderSubCategory
+print("=== statLeaders subCategories stats __typename ===")
 d = gql("""
 {
   statLeaders(tourCode: R, category: STROKES_GAINED) {
-    categoryHeader
-    subCategories { __typename }
+    subCategories { stats { __typename } }
   }
 }
 """)
-result = ((d.get("data") or {}).get("statLeaders") or {})
-subs = result.get("subCategories") or []
-print(f"categoryHeader: {result.get('categoryHeader')}")
-print(f"subCategories count: {len(subs)}, first typename: {subs[0] if subs else 'none'}")
+subs = ((d.get("data") or {}).get("statLeaders") or {}).get("subCategories") or []
+stat_items = (subs[0].get("stats") or []) if subs else []
+print(f"stats count: {len(stat_items)}, first: {stat_items[0] if stat_items else 'none'}")
 
-# 2. Get element type fields
-sub_typename = subs[0].get("__typename") if subs else None
-if sub_typename:
-    print(f"\n=== {sub_typename} fields ===")
-    d2 = gql(f'{{ __type(name: "{sub_typename}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
+stat_typename = stat_items[0].get("__typename") if stat_items else None
+if stat_typename:
+    print(f"\n=== {stat_typename} fields ===")
+    d2 = gql(f'{{ __type(name: "{stat_typename}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
     fields = ((d2.get("data") or {}).get("__type") or {}).get("fields") or []
     for f in fields:
         print(f"  {f['name']}: {f['type']}")
 
-    # 3. Try fetching with likely stat fields
-    print(f"\n=== statLeaders subCategories with stat fields ===")
-    for field_combo in ["statId statTitle", "statId title", "statId name", "statId displayTitle"]:
-        try:
-            d3 = gql(f"""
-            {{
-              statLeaders(tourCode: R, category: STROKES_GAINED) {{
-                categoryHeader
-                subCategories {{ {field_combo} }}
-              }}
+    # 2. Fetch with all field names
+    all_field_names = " ".join(f[0] for f in [(f["name"], f["type"]) for f in fields])
+    print(f"\n=== Full stat item (all fields) ===")
+    try:
+        d3 = gql(f"""
+        {{
+          statLeaders(tourCode: R, category: STROKES_GAINED) {{
+            subCategories {{
+              subCategoryName
+              stats {{ {all_field_names} }}
             }}
-            """)
-            if not d3.get("errors"):
-                subs2 = ((d3.get("data") or {}).get("statLeaders") or {}).get("subCategories") or []
-                print(f"  Fields '{field_combo}' worked! {len(subs2)} subcategories, first 3: {subs2[:3]}")
-                break
-            else:
-                print(f"  '{field_combo}': {d3['errors'][0]['message'][:80]}")
-        except Exception as e:
-            print(f"  '{field_combo}': error {e}")
+          }}
+        }}
+        """)
+        subs2 = ((d3.get("data") or {}).get("statLeaders") or {}).get("subCategories") or []
+        for sub in subs2:
+            print(f"\n  Subcategory: {sub.get('subCategoryName')}")
+            for s in (sub.get("stats") or []):
+                print(f"    {s}")
+    except Exception as e:
+        print(f"error: {e}")
+        if d3.get("errors"):
+            print(d3["errors"])
