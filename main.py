@@ -130,28 +130,37 @@ def run_setup_stats():
             idx += 1
 
     console.print()
-    console.print("[dim]Enter 5 numbers from the list above, or type a stat ID directly.[/dim]")
+    console.print("[dim]Enter a number from the list, or paste any stat ID from pgatour.com/stats/detail/<ID>.[/dim]")
+    console.print("[dim]Leave blank and press Enter when done (minimum 1 stat).[/dim]")
     console.print()
 
-    for i in range(1, 6):
-        while True:
-            raw = Prompt.ask(f"  Stat {i}", console=console).strip()
-            if raw.isdigit() and int(raw) in idx_map:
-                chosen = idx_map[int(raw)]
-                label = Prompt.ask(
-                    f"    Label for '{chosen['label']}'",
-                    default=chosen["label"],
-                    console=console,
-                )
-                selected.append({"id": chosen["id"], "label": label})
-                break
-            elif raw:
-                # Treat as a raw stat ID typed directly
-                label = Prompt.ask(f"    Label for stat {raw}", default=raw, console=console)
-                selected.append({"id": raw, "label": label})
-                break
-            else:
-                console.print("  [red]Please enter a number or stat ID.[/red]")
+    i = 1
+    while True:
+        raw = Prompt.ask(f"  Stat {i} [dim](blank to finish)[/dim]", default="", console=console).strip()
+        if not raw:
+            if not selected:
+                console.print("  [red]Enter at least one stat.[/red]")
+                continue
+            break
+        if raw.isdigit() and int(raw) in idx_map:
+            chosen = idx_map[int(raw)]
+            label = Prompt.ask(
+                f"    Label for '{chosen['label']}'",
+                default=chosen["label"],
+                console=console,
+            )
+            selected.append({"id": chosen["id"], "label": label})
+        else:
+            # Raw stat ID entered directly
+            # Try to look up the title from the API
+            try:
+                rows, title = pga._fetch_stat(raw)
+                default_label = title or raw
+            except Exception:
+                default_label = raw
+            label = Prompt.ask(f"    Label for stat {raw}", default=default_label, console=console)
+            selected.append({"id": raw, "label": label})
+        i += 1
 
     console.print()
     from datagolf.pgatour import auto_season_weight
