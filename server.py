@@ -9,7 +9,11 @@ Setup:
        python server.py
   3. Open http://<your-server-ip>:8080 in a browser.
 
-The page auto-refreshes every 5 minutes. API results are cached server-side
+Pages:
+  /           — Pre-tournament rankings
+  /matchups   — Round matchup edges
+
+The pages auto-refresh every 5 minutes. API results are cached server-side
 so multiple browser loads don't hammer the DataGolf API.
 """
 
@@ -21,7 +25,7 @@ from datetime import datetime
 from threading import Lock
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, redirect, render_template_string
 
 from datagolf.client import DataGolfClient
 from datagolf.matchups import parse_matchups
@@ -38,7 +42,6 @@ def _load_weekly_stats():
         return [], auto_w
     with open(WEEKLY_STATS_FILE) as f:
         cfg = json.load(f)
-    # If weight not explicitly set, use auto-calculated value
     weight = cfg.get("season_blend", {}).get("current_weight") or auto_w
     return cfg.get("stats", []), weight
 
@@ -70,8 +73,8 @@ _cache: dict = {"data": None, "ts": 0}
 _lock = Lock()
 
 
-def get_rankings(force: bool = False) -> dict:
-    """Return cached rankings, refreshing if stale or forced."""
+def get_data(force: bool = False) -> dict:
+    """Return cached data, refreshing if stale or forced."""
     with _lock:
         now = time.time()
         if not force and _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
@@ -142,8 +145,23 @@ def _fetch(settings: dict) -> dict:
             except Exception:
                 pass
 
-    # Course history requires historical-raw-data/rounds (DataGolf premium tier).
-    # Skipped silently if unavailable.
+    # DraftKings outright odds
+    dk_map = {}
+    try:
+        import math
+        ou_raw = client.get_outrights(tour=tour)
+        for p in (ou_raw.get("odds") or []):
+            name = p.get("player_name")
+            dk = p.get("draftkings")
+            if name and dk is not None:
+                try:
+                    odds = float(dk)
+                    prob = 100 / (odds + 100) if odds > 0 else -odds / (-odds + 100)
+                    dk_map[name] = {"odds": odds, "prob": prob}
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # Matchups
     matchups_html = ""
@@ -163,8 +181,9 @@ def _fetch(settings: dict) -> dict:
 
     return {
         "event_name": event_name,
-        "rankings_html": _rankings_to_html(df, extra_cols),
+        "rankings_html": _rankings_to_html(df, extra_cols, dk_map),
         "extra_col_headers": extra_cols,
+        "has_dk": bool(dk_map),
         "matchups_html": matchups_html,
         "weights": weights,
         "history": history,
@@ -212,22 +231,49 @@ def _american(prob):
         return "-"
 
 
-def _rankings_to_html(df, extra_cols=None) -> str:
+def _american_raw(odds):
+    """Format raw American odds value."""
+    try:
+        v = float(odds)
+        return f"+{int(v)}" if v > 0 else str(int(v))
+    except Exception:
+        return "<span class='dim'>-</span>"
+
+
+def _rankings_to_html(df, extra_cols=None, dk_map=None) -> str:
     extra_cols = extra_cols or []
+    dk_map = dk_map or {}
     rows = []
     for _, r in df.head(50).iterrows():
+        name = r.get("player_name") or ""
+        dk = dk_map.get(name, {})
+        dk_odds_html = _american_raw(dk.get("odds")) if dk else "<span class='dim'>-</span>"
+
+        # EV%: (my_prob / dk_implied - 1) * 100
+        ev_html = "<span class='dim'>-</span>"
+        my_p = r.get("model_win_prob")
+        dk_p = dk.get("prob")
+        if my_p and dk_p and dk_p > 0:
+            import math
+            if not (math.isnan(my_p) or math.isnan(dk_p)):
+                ev = (my_p / dk_p - 1) * 100
+                s = f"{ev:+.1f}%"
+                ev_html = f"<span class='pos'>{s}</span>" if ev > 0 else f"<span class='dim'>{s}</span>"
+
         extra_cells = ""
         for col in extra_cols:
             v = r.get(col)
             cell_val = "<span class='dim'>-</span>" if v is None else str(int(v))
             extra_cells += f"<td>{cell_val}</td>"
+
         rows.append(f"""
         <tr>
           <td class="dim">{int(r['rank'])}</td>
-          <td class="name">{r.get('player_name') or ''}</td>
+          <td class="name">{name}</td>
           <td>{_pct(r.get('win_prob'))}</td>
-          <td>{_american(r.get('win_prob'))}</td>
+          <td>{dk_odds_html}</td>
           <td>{_american(r.get('model_win_prob'))}</td>
+          <td>{ev_html}</td>
           <td>{_num(r.get('sg_ott'), signed=True)}</td>
           <td>{_num(r.get('sg_app'), signed=True)}</td>
           <td>{_num(r.get('sg_arg'), signed=True)}</td>
@@ -319,53 +365,58 @@ def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Flask app
+# Shared HTML pieces
 # ---------------------------------------------------------------------------
 
-app = Flask(__name__)
+_CSS = """
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f1117; color: #e2e8f0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 24px; }
+  h1 { font-size: 20px; color: #63b3ed; margin-bottom: 4px; }
+  .meta { color: #718096; font-size: 12px; margin-bottom: 6px; }
+  .weights { color: #718096; font-size: 11px; margin-bottom: 16px; }
+  .error { background: #742a2a; color: #fed7d7; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: right; color: #718096; padding: 6px 10px; border-bottom: 1px solid #2d3748; white-space: nowrap; }
+  th:nth-child(2), th:first-child { text-align: left; }
+  td { padding: 5px 10px; text-align: right; border-bottom: 1px solid #1a202c; white-space: nowrap; }
+  td.name, td:first-child { text-align: left; }
+  td.dim, span.dim { color: #4a5568; }
+  span.pos, .pos { color: #68d391; }
+  span.neg { color: #fc8181; }
+  .bold { font-weight: 600; }
+  tr:hover td { background: #1a202c; }
+  nav { display: flex; gap: 8px; margin-bottom: 20px; }
+  .nav-btn { padding: 6px 14px; background: #2d3748; color: #a0aec0; border-radius: 4px; text-decoration: none; font-size: 12px; }
+  .nav-btn:hover { background: #4a5568; }
+  .nav-btn.active { background: #2b6cb0; color: #bee3f8; }
+"""
 
-HTML_TEMPLATE = """<!DOCTYPE html>
+RANKINGS_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="refresh" content="300">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ event_name }}</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0f1117; color: #e2e8f0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 24px; }
-    h1 { font-size: 20px; color: #63b3ed; margin-bottom: 4px; }
-    h2 { font-size: 15px; color: #63b3ed; margin: 32px 0 12px; }
-    .meta { color: #718096; font-size: 12px; margin-bottom: 6px; }
-    .weights { color: #718096; font-size: 11px; margin-bottom: 20px; }
-    .error { background: #742a2a; color: #fed7d7; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; }
-    table { border-collapse: collapse; width: 100%; }
-    th { text-align: right; color: #718096; padding: 6px 10px; border-bottom: 1px solid #2d3748; white-space: nowrap; }
-    th:nth-child(2), th:first-child { text-align: left; }
-    td { padding: 5px 10px; text-align: right; border-bottom: 1px solid #1a202c; white-space: nowrap; }
-    td.name, td:first-child { text-align: left; }
-    td.dim, span.dim { color: #4a5568; }
-    span.pos, .pos { color: #68d391; }
-    span.neg { color: #fc8181; }
-    .bold { font-weight: 600; }
-    tr:hover td { background: #1a202c; }
-    .refresh-btn { display: inline-block; margin-top: 8px; padding: 6px 14px; background: #2d3748; color: #a0aec0; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; text-decoration: none; }
-    .refresh-btn:hover { background: #4a5568; }
-  </style>
+  <style>{{ css }}</style>
 </head>
 <body>
-  {% if error %}
-  <div class="error">⚠ Error fetching data: {{ error }} — showing last cached result.</div>
-  {% endif %}
+  {% if error %}<div class="error">⚠ {{ error }} — showing last cached result.</div>{% endif %}
 
   <h1>{{ event_name }}</h1>
-  <div class="meta">Updated: {{ cached_at }} &nbsp;·&nbsp; <a class="refresh-btn" href="/refresh">↻ Refresh now</a></div>
+  <div class="meta">Updated: {{ cached_at }}</div>
   <div class="weights">{{ weights_str }}</div>
+
+  <nav>
+    <a class="nav-btn active" href="/">Rankings</a>
+    <a class="nav-btn" href="/matchups">Matchups</a>
+    <a class="nav-btn" href="/refresh">↻ Refresh</a>
+  </nav>
 
   <table>
     <thead><tr>
       <th>#</th><th>Player</th>
-      <th>Win%</th><th>DG Odds</th><th>My Odds</th>
+      <th>Win%</th><th>DK Odds</th><th>My Odds</th><th>EV%</th>
       <th>SG:OTT</th><th>SG:APP</th><th>SG:ARG</th><th>SG:PUT</th><th>SG:TOT</th>
       <th>Score</th>
       {% for col in extra_col_headers %}<th>{{ col }}</th>{% endfor %}
@@ -373,44 +424,95 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <tbody>{{ rankings_html | safe }}</tbody>
   </table>
 
+  <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
+</body>
+</html>"""
+
+MATCHUPS_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="300">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Matchups — {{ event_name }}</title>
+  <style>{{ css }}</style>
+</head>
+<body>
+  {% if error %}<div class="error">⚠ {{ error }} — showing last cached result.</div>{% endif %}
+
+  <h1>{{ event_name }}</h1>
+  <div class="meta">Updated: {{ cached_at }}</div>
+
+  <nav>
+    <a class="nav-btn" href="/">Rankings</a>
+    <a class="nav-btn active" href="/matchups">Matchups</a>
+    <a class="nav-btn" href="/matchups/refresh">↻ Refresh</a>
+  </nav>
+
   {% if matchups_html %}
-  <h2>Matchup Edges — Round</h2>
   {{ matchups_html | safe }}
+  {% else %}
+  <p class="meta">No matchup data available — check back once the round starts.</p>
   {% endif %}
 
-  <p class="meta" style="margin-top:24px">Page auto-refreshes every 5 minutes.</p>
+  <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
 </body>
 </html>"""
 
 
+# ---------------------------------------------------------------------------
+# Flask app
+# ---------------------------------------------------------------------------
+
+app = Flask(__name__)
+
+
 @app.route("/")
 def index():
-    data = get_rankings()
+    data = get_data()
     settings = load_settings()
     w = settings.get("weights", {})
     weights_str = "  ".join(f"{k}={v:.0%}" for k, v in w.items())
     return render_template_string(
-        HTML_TEMPLATE,
+        RANKINGS_TEMPLATE,
+        css=_CSS,
         event_name=data.get("event_name", "DataGolf Rankings"),
         cached_at=data.get("cached_at", "—"),
         error=data.get("error"),
         rankings_html=data.get("rankings_html", ""),
-        matchups_html=data.get("matchups_html", ""),
         weights_str=weights_str,
         extra_col_headers=data.get("extra_col_headers", []),
     )
 
 
+@app.route("/matchups")
+def matchups():
+    data = get_data()
+    return render_template_string(
+        MATCHUPS_TEMPLATE,
+        css=_CSS,
+        event_name=data.get("event_name", "DataGolf Rankings"),
+        cached_at=data.get("cached_at", "—"),
+        error=data.get("error"),
+        matchups_html=data.get("matchups_html", ""),
+    )
+
+
 @app.route("/refresh")
 def refresh():
-    get_rankings(force=True)
-    from flask import redirect
+    get_data(force=True)
     return redirect("/")
+
+
+@app.route("/matchups/refresh")
+def matchups_refresh():
+    get_data(force=True)
+    return redirect("/matchups")
 
 
 @app.route("/api/data")
 def api_data():
-    data = get_rankings()
+    data = get_data()
     return jsonify({
         "event_name": data.get("event_name"),
         "cached_at": data.get("cached_at"),
