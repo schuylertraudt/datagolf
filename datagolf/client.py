@@ -90,7 +90,7 @@ class DataGolfClient:
     def get_outrights(
         self,
         tour: str = "pga",
-        market: str = "winner",
+        market: str = "win",
         odds_format: str = "american",
     ) -> dict:
         """
