@@ -79,21 +79,17 @@ _API_URL = "https://orchestrator.pgatour.com/graphql"
 _API_KEY  = "da2-gsrx5bibzbb4njvhl7t37wqyl4"
 
 _STAT_QUERY = """
-query StatDetails($tourCode: TourCode!, $statId: String!, $season: Int) {
-  statDetails(tourCode: $tourCode, statId: $statId, season: $season) {
-    tourCode
-    year
+query StatDetails($tourCode: TourCode!, $statId: String!, $year: Int) {
+  statDetails(tourCode: $tourCode, statId: $statId, year: $year) {
     statId
     statTitle
-    statEntries {
-      playerId
-      playerName
-      rank
-      total
-      average
-      statValues {
-        statValue
-        label
+    rows {
+      ... on StatDetailsPlayer {
+        playerName
+        rank
+        stats {
+          statValue
+        }
       }
     }
   }
@@ -214,24 +210,26 @@ class PGATourStats:
         except Exception as exc:
             return [], str(exc)
 
-    def _fetch_stat(self, stat_id: str, season: int) -> list:
-        """Fetch raw stat entries for one stat + season. Returns list of player dicts."""
-        payload = {
-            "query": _STAT_QUERY,
-            "variables": {
-                "tourCode": "R",   # "R" = PGA Tour
-                "statId": stat_id,
-                "season": season,
-            },
-        }
+    def _fetch_stat(self, stat_id: str, year: int = None, _debug: bool = False) -> tuple:
+        """Fetch raw stat entries for a stat + optional year. Returns (rows, title)."""
+        variables = {"tourCode": "R", "statId": stat_id}
+        if year is not None:
+            variables["year"] = year
+        payload = {"query": _STAT_QUERY, "variables": variables}
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
-        details = (
-            data.get("data", {})
-                .get("statDetails", {})
-        )
-        return details.get("statEntries") or [], details.get("statTitle", "")
+        if _debug:
+            import json as _json
+            details_raw = (data.get("data") or {}).get("statDetails")
+            print(f"  [debug] stat={stat_id} year={year} errors={data.get('errors')}")
+            print(f"  [debug] statDetails={_json.dumps(details_raw, indent=2)[:500] if details_raw else details_raw}")
+        details = (data.get("data") or {}).get("statDetails") or {}
+        rows_raw = details.get("rows") or []
+        if _debug:
+            print(f"  [debug] total rows={len(rows_raw)}, first raw row={rows_raw[0] if rows_raw else 'NONE'}")
+        rows = [r for r in rows_raw if r.get("playerName")]
+        return rows, details.get("statTitle", "")
 
     def get_combined_stat(
         self,
@@ -240,32 +238,26 @@ class PGATourStats:
         current_weight: float = 0.6,
     ) -> pd.DataFrame:
         """
-        Fetch a stat for the current AND previous season, then produce a single
-        combined rank per player using a weighted average of their season percentiles.
+        Fetch a stat for the current season (API default) and previous season,
+        blend by percentile rank, and return a single combined_rank per player.
 
         current_weight: 0–1. Weight given to current season (rest goes to previous).
 
-        Returns a DataFrame with columns:
-            player_name, stat_id, label, combined_rank,
-            cur_rank, cur_value, prev_rank, prev_value
+        Returns DataFrame with columns:
+            player_name, stat_id, label, combined_rank, cur_rank, cur_value, prev_rank, prev_value
         """
-        cur_year  = self._current_year
-        prev_year = cur_year - 1
-
-        cur_entries,  title = self._fetch_stat(stat_id, cur_year)
-        prev_entries, _     = self._fetch_stat(stat_id, prev_year)
+        debug = getattr(self, "_debug", False)
+        cur_entries,  title = self._fetch_stat(stat_id, _debug=debug)
+        prev_entries, _     = self._fetch_stat(stat_id, year=self._current_year - 1, _debug=debug)
 
         cur_df  = _entries_to_df(cur_entries,  suffix="cur")
         prev_df = _entries_to_df(prev_entries, suffix="prev")
 
-        # Merge on normalized player name
         df = cur_df.merge(prev_df, on="player_name", how="outer")
 
         n_cur  = df["cur_rank"].notna().sum()
         n_prev = df["prev_rank"].notna().sum()
 
-        # Convert ranks to percentiles (lower rank = better = higher percentile)
-        # Percentile = 1 - (rank - 1) / (n - 1), capped to [0, 1]
         if n_cur > 1:
             df["cur_pct"]  = 1 - (df["cur_rank"]  - 1) / (n_cur  - 1)
         else:
@@ -277,8 +269,6 @@ class PGATourStats:
             df["prev_pct"] = np.nan
 
         prev_weight = 1.0 - current_weight
-
-        # Blend percentiles; fall back to whichever season is available
         has_both = df["cur_pct"].notna() & df["prev_pct"].notna()
         has_cur  = df["cur_pct"].notna() & df["prev_pct"].isna()
         has_prev = df["cur_pct"].isna()  & df["prev_pct"].notna()
@@ -291,17 +281,13 @@ class PGATourStats:
         df.loc[has_cur,  "blended_pct"] = df.loc[has_cur,  "cur_pct"]
         df.loc[has_prev, "blended_pct"] = df.loc[has_prev, "prev_pct"]
 
-        # Convert blended percentile back to a combined rank (1 = best)
         df = df.sort_values("blended_pct", ascending=False).reset_index(drop=True)
         df["combined_rank"] = df.index + 1
-
         df["stat_id"] = stat_id
         df["label"]   = label or title or stat_id
 
-        return df[[
-            "player_name", "stat_id", "label", "combined_rank",
-            "cur_rank", "cur_value", "prev_rank", "prev_value",
-        ]]
+        return df[["player_name", "stat_id", "label", "combined_rank",
+                   "cur_rank", "cur_value", "prev_rank", "prev_value"]]
 
 
 # ---------------------------------------------------------------------------
@@ -309,21 +295,16 @@ class PGATourStats:
 # ---------------------------------------------------------------------------
 
 def _entries_to_df(entries: list, suffix: str) -> pd.DataFrame:
-    """Convert raw GraphQL stat entries to a normalized DataFrame."""
+    """Convert raw GraphQL stat rows (StatDetailsPlayer) to a normalized DataFrame."""
     rows = []
     for e in entries:
         name = _normalize_name(e.get("playerName") or "")
         if not name:
             continue
         rank = _to_int(e.get("rank"))
-        # Primary value: try average, then total, then first statValue
-        value = _to_float(e.get("average"))
-        if value is None:
-            value = _to_float(e.get("total"))
-        if value is None:
-            stat_vals = e.get("statValues") or []
-            if stat_vals:
-                value = _to_float(stat_vals[0].get("statValue"))
+        # Primary value: first entry in stats list
+        stat_vals = e.get("stats") or []
+        value = _to_float(stat_vals[0].get("statValue")) if stat_vals else None
         rows.append({"player_name": name, f"{suffix}_rank": rank, f"{suffix}_value": value})
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=["player_name", f"{suffix}_rank", f"{suffix}_value"]

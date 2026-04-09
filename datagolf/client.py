@@ -7,6 +7,9 @@ BASE_URL = "https://feeds.datagolf.com"
 # All SG stats available from the live-tournament-stats endpoint
 LIVE_STATS = "sg_ott,sg_app,sg_arg,sg_putt,sg_t2g,sg_total"
 
+# Traditional stats to probe (may be available depending on API tier)
+TRADITIONAL_STATS = "driving_dist,driving_acc,gir,scrambling,prox_fw,prox_rgh"
+
 
 class DataGolfClient:
     def __init__(self, api_key: str):
@@ -84,6 +87,21 @@ class DataGolfClient:
         """
         return self._get("preds/skill-ratings", {"display": display})
 
+    def get_outrights(
+        self,
+        tour: str = "pga",
+        market: str = "winner",
+        odds_format: str = "american",
+    ) -> dict:
+        """
+        Outright tournament winner odds from DraftKings, FanDuel, and other books.
+        odds_format: 'american', 'decimal', or 'percent'
+        """
+        return self._get(
+            "betting-tools/outrights",
+            {"tour": tour, "market": market, "odds_format": odds_format},
+        )
+
     def get_matchups(
         self,
         tour: str = "pga",
@@ -141,3 +159,23 @@ class DataGolfClient:
         except Exception:
             # skill-ratings is a reliable fallback: it reflects rolling SG averages
             return self._get("preds/skill-ratings", {})
+
+    def get_course_history(
+        self,
+        tour: str = "pga",
+        event_id: str = "",
+        n_rounds: int = 40,
+    ) -> dict:
+        """
+        Historical per-player results at the current tournament venue,
+        pulled via historical-raw-data/rounds filtered to a specific event_id.
+
+        event_id: DataGolf event ID found in the predictions/live-stats response.
+                  If empty, falls back to the unfiltered rolling rounds endpoint
+                  (less useful for course-specific ranking).
+        n_rounds: Maximum rounds to look back (default 40 covers ~5 years of one event).
+        """
+        params: dict = {"tour": tour, "n_rounds": n_rounds}
+        if event_id:
+            params["event_id"] = event_id
+        return self._get("historical-raw-data/rounds", params)
