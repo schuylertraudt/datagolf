@@ -203,7 +203,31 @@ def run_setup_stats():
         console.print(f"  {s['label']:<30} [dim]{s['id']}[/dim]")
 
 
-def prob_to_american(prob: float) -> str:
+def parse_dk_odds(raw: dict) -> pd.DataFrame:
+    """
+    Parse DataGolf outrights response and return DataFrame with
+    columns: player_name, dk_odds (American), dk_prob (implied, with vig).
+    Returns empty DataFrame if DraftKings odds not available.
+    """
+    players = raw.get("odds") or []
+    rows = []
+    for p in players:
+        name = p.get("player_name")
+        dk = p.get("draftkings")
+        if name and dk is not None:
+            try:
+                odds = float(dk)
+                if odds > 0:
+                    prob = 100 / (odds + 100)
+                else:
+                    prob = -odds / (-odds + 100)
+                rows.append({"player_name": name, "dk_odds": odds, "dk_prob": prob})
+            except (TypeError, ValueError):
+                pass
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["player_name", "dk_odds", "dk_prob"])
+
+
+
     """Convert a win probability (0-1) to American odds string, e.g. '+350' or '-120'."""
     if not prob or pd.isna(prob) or prob <= 0 or prob >= 1:
         return "[dim]-[/dim]"
@@ -501,9 +525,12 @@ def display_rankings(
             t.add_column("Pos",  justify="center", width=5)
             t.add_column("Thru", justify="center", width=5)
         t.add_column("Win%",    justify="right", min_width=7)
-        t.add_column("DG Odds", justify="right", min_width=8)
+        if "dk_odds" in df.columns:
+            t.add_column("DK Odds", justify="right", min_width=8)
         if "model_win_prob" in df.columns:
             t.add_column("My Odds", justify="right", min_width=8)
+        if "dk_odds" in df.columns and "model_win_prob" in df.columns:
+            t.add_column("EV%", justify="right", min_width=7)
         t.add_column("SG:OTT", justify="right", min_width=7)
         t.add_column("SG:APP", justify="right", min_width=7)
         t.add_column("SG:ARG", justify="right", min_width=7)
@@ -528,12 +555,21 @@ def display_rankings(
         else:
             if not pre_tournament:
                 cells += [fmt_pos(row.get("position")), fmt_pos(row.get("thru"))]
-            cells += [
-                fmt_pct(row.get("win_prob")),
-                prob_to_american(row.get("win_prob")),
-            ]
+            cells.append(fmt_pct(row.get("win_prob")))
+            if "dk_odds" in display_df.columns:
+                v = row.get("dk_odds")
+                cells.append(f"+{int(v)}" if v and v > 0 else (str(int(v)) if v else "[dim]-[/dim]"))
             if "model_win_prob" in display_df.columns:
                 cells.append(prob_to_american(row.get("model_win_prob")))
+            if "dk_odds" in display_df.columns and "model_win_prob" in display_df.columns:
+                my_p = row.get("model_win_prob")
+                dk_p = row.get("dk_prob")
+                if my_p and dk_p and dk_p > 0:
+                    ev = (my_p / dk_p - 1) * 100
+                    s = f"{ev:+.1f}%"
+                    cells.append(f"[green]{s}[/green]" if ev > 0 else f"[dim]{s}[/dim]")
+                else:
+                    cells.append("[dim]-[/dim]")
             cells += [
                 fmt(row.get("sg_ott"), signed=True),
                 fmt(row.get("sg_app"), signed=True),
@@ -726,8 +762,15 @@ def main():
                 console.print(f"[dim]  DG normalized sample names: {sample_dg}[/dim]")
             df = merge_weekly_stats(df, stat_dfs)
 
-    # --- DraftKings outright odds (TODO: parse once endpoint confirmed) ---
-    outrights_raw = None
+    # --- DraftKings outright odds ---
+    with console.status("[cyan]Fetching DraftKings outright odds…[/cyan]"):
+        try:
+            outrights_raw = client.get_outrights(tour=args.tour)
+            dk_df = parse_dk_odds(outrights_raw)
+            if not dk_df.empty:
+                df = df.merge(dk_df[["player_name", "dk_odds", "dk_prob"]], on="player_name", how="left")
+        except Exception as exc:
+            console.print(f"[dim]DK odds unavailable: {exc}[/dim]")
 
     top_n = 0 if args.all else args.top
     display_rankings(
