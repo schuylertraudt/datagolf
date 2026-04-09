@@ -665,28 +665,8 @@ def main():
         if stat_dfs:
             df = merge_weekly_stats(df, stat_dfs)
 
-    # --- DraftKings outright odds + EV% ---
-    with console.status("[cyan]Fetching DraftKings outright odds…[/cyan]"):
-        try:
-            outrights_raw = client.get_outrights(tour=args.tour)
-            console.print(f"[dim]DEBUG outrights keys: {list(outrights_raw.keys())[:8]}[/dim]")
-            console.print(f"[dim]DEBUG outrights sample: {repr(list(outrights_raw.values())[0])[:300] if outrights_raw else 'empty'}[/dim]")
-        except Exception as exc:
-            console.print(f"[yellow]Warning:[/yellow] Could not fetch DK outright odds: {exc}")
-            outrights_raw = None
-
-    # --- Probe DataGolf traditional stats availability ---
-    from datagolf.client import TRADITIONAL_STATS
-    with console.status("[cyan]Probing DataGolf traditional stats…[/cyan]"):
-        try:
-            trad_raw = client.get_live_tournament_stats(tour=args.tour, stats=TRADITIONAL_STATS)
-            players = trad_raw.get("live_stats") or trad_raw.get("data") or []
-            if players:
-                console.print(f"[dim]DEBUG trad stats sample player: {repr(players[0])[:400]}[/dim]")
-            else:
-                console.print(f"[dim]DEBUG trad stats keys: {list(trad_raw.keys())}[/dim]")
-        except Exception as exc:
-            console.print(f"[dim]DEBUG trad stats error: {exc}[/dim]")
+    # --- DraftKings outright odds (TODO: parse once endpoint confirmed) ---
+    outrights_raw = None
 
     top_n = 0 if args.all else args.top
     display_rankings(

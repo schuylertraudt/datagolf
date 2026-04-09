@@ -123,7 +123,6 @@ def _fetch(settings: dict) -> dict:
 
     # Weekly PGA Tour stats
     stat_configs, season_weight = _load_weekly_stats()
-    print(f"[server] weekly stats loaded: {len(stat_configs)} stats, weight={season_weight}")
     extra_cols = []
     if stat_configs:
         from datagolf.pgatour import _normalize_name
@@ -139,13 +138,9 @@ def _fetch(settings: dict) -> dict:
                 lookup = stat_df.set_index("player_name")["combined_rank"]
                 df[col] = normalized_names.map(lookup)
                 df[col] = df[col].apply(lambda x: int(x) if not _pd.isna(x) else None)
-                matched = df[col].notna().sum()
-                print(f"[server] stat '{col}': {len(stat_df)} rows fetched, {matched}/{len(df)} players matched")
                 extra_cols.append(col)
-            except Exception as e:
-                import traceback
-                print(f"[server] stat error: {e}")
-                traceback.print_exc()
+            except Exception:
+                pass
 
     # Course history requires historical-raw-data/rounds (DataGolf premium tier).
     # Skipped silently if unavailable.

@@ -79,8 +79,8 @@ _API_URL = "https://orchestrator.pgatour.com/graphql"
 _API_KEY  = "da2-gsrx5bibzbb4njvhl7t37wqyl4"
 
 _STAT_QUERY = """
-query StatDetails($tourCode: TourCode!, $statId: String!) {
-  statDetails(tourCode: $tourCode, statId: $statId) {
+query StatDetails($tourCode: TourCode!, $statId: String!, $year: Int) {
+  statDetails(tourCode: $tourCode, statId: $statId, year: $year) {
     statId
     statTitle
     rows {
@@ -212,22 +212,11 @@ class PGATourStats:
             return [], str(exc)
 
     def _fetch_stat(self, stat_id: str, year: int = None) -> tuple:
-        """Fetch raw stat entries for a stat. Returns (rows, title)."""
-        # On first call, introspect the statDetails query arguments
-        intro_q = {"query": '{ __type(name: "Query") { fields { name args { name type { name kind ofType { name } } } } } }'}
-        try:
-            ir = self.session.post(_API_URL, json=intro_q, timeout=self.timeout)
-            fields = ((ir.json().get("data") or {}).get("__type") or {}).get("fields") or []
-            sd = next((f for f in fields if f["name"] == "statDetails"), None)
-            if sd:
-                print(f"  [pgatour] statDetails args: {[(a['name'], a['type']) for a in sd.get('args', [])]}")
-        except Exception as e:
-            print(f"  [pgatour] introspect error: {e}")
-
-        payload = {
-            "query": _STAT_QUERY,
-            "variables": {"tourCode": "R", "statId": stat_id},
-        }
+        """Fetch raw stat entries for a stat + optional year. Returns (rows, title)."""
+        variables = {"tourCode": "R", "statId": stat_id}
+        if year is not None:
+            variables["year"] = year
+        payload = {"query": _STAT_QUERY, "variables": variables}
         resp = self.session.post(_API_URL, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
@@ -239,22 +228,58 @@ class PGATourStats:
         self,
         stat_id: str,
         label: Optional[str] = None,
-        current_weight: float = 0.6,  # kept for API compatibility, unused
+        current_weight: float = 0.6,
     ) -> pd.DataFrame:
         """
-        Fetch a stat and rank players. Returns a DataFrame with columns:
-            player_name, stat_id, label, combined_rank, cur_rank, cur_value
-        """
-        entries, title = self._fetch_stat(stat_id)
-        df = _entries_to_df(entries, suffix="cur")
-        if df.empty:
-            return pd.DataFrame(columns=["player_name", "stat_id", "label", "combined_rank", "cur_rank", "cur_value"])
+        Fetch a stat for the current (2026) and previous (2025) season, blend
+        by percentile rank, and return a single combined_rank per player.
 
-        df = df.sort_values("cur_rank").reset_index(drop=True)
-        df["combined_rank"] = df["cur_rank"].rank(method="min").astype("Int64")
+        current_weight: 0–1. Weight given to current season (rest goes to previous).
+
+        Returns DataFrame with columns:
+            player_name, stat_id, label, combined_rank, cur_rank, cur_value, prev_rank, prev_value
+        """
+        cur_entries,  title = self._fetch_stat(stat_id, year=2026)
+        prev_entries, _     = self._fetch_stat(stat_id, year=2025)
+
+        cur_df  = _entries_to_df(cur_entries,  suffix="cur")
+        prev_df = _entries_to_df(prev_entries, suffix="prev")
+
+        df = cur_df.merge(prev_df, on="player_name", how="outer")
+
+        n_cur  = df["cur_rank"].notna().sum()
+        n_prev = df["prev_rank"].notna().sum()
+
+        if n_cur > 1:
+            df["cur_pct"]  = 1 - (df["cur_rank"]  - 1) / (n_cur  - 1)
+        else:
+            df["cur_pct"]  = np.nan
+
+        if n_prev > 1:
+            df["prev_pct"] = 1 - (df["prev_rank"] - 1) / (n_prev - 1)
+        else:
+            df["prev_pct"] = np.nan
+
+        prev_weight = 1.0 - current_weight
+        has_both = df["cur_pct"].notna() & df["prev_pct"].notna()
+        has_cur  = df["cur_pct"].notna() & df["prev_pct"].isna()
+        has_prev = df["cur_pct"].isna()  & df["prev_pct"].notna()
+
+        df["blended_pct"] = np.nan
+        df.loc[has_both, "blended_pct"] = (
+            current_weight * df.loc[has_both, "cur_pct"] +
+            prev_weight    * df.loc[has_both, "prev_pct"]
+        )
+        df.loc[has_cur,  "blended_pct"] = df.loc[has_cur,  "cur_pct"]
+        df.loc[has_prev, "blended_pct"] = df.loc[has_prev, "prev_pct"]
+
+        df = df.sort_values("blended_pct", ascending=False).reset_index(drop=True)
+        df["combined_rank"] = df.index + 1
         df["stat_id"] = stat_id
         df["label"]   = label or title or stat_id
-        return df[["player_name", "stat_id", "label", "combined_rank", "cur_rank", "cur_value"]]
+
+        return df[["player_name", "stat_id", "label", "combined_rank",
+                   "cur_rank", "cur_value", "prev_rank", "prev_value"]]
 
 
 # ---------------------------------------------------------------------------
