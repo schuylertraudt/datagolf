@@ -55,7 +55,7 @@ def load_weekly_stats():
     return cfg.get("stats", []), weight
 
 
-def fetch_weekly_stats(stat_configs) -> dict[str, pd.DataFrame]:
+def fetch_weekly_stats(stat_configs, debug: bool = False) -> dict[str, pd.DataFrame]:
     """
     Fetch each configured PGA Tour stat. Returns dict of label -> combined DataFrame.
     Silently skips any stat that fails to load.
@@ -68,6 +68,9 @@ def fetch_weekly_stats(stat_configs) -> dict[str, pd.DataFrame]:
         try:
             df = client.get_combined_stat(s["id"], label=s.get("label"))
             results[s.get("label", s["id"])] = df
+            if debug:
+                console.print(f"[dim]  {s.get('label', s['id'])}: {len(df)} players, "
+                              f"sample names: {list(df['player_name'].head(3))}[/dim]")
         except Exception as exc:
             console.print(f"[yellow]Warning:[/yellow] Could not fetch PGA Tour stat {s.get('label', s['id'])}: {exc}")
     return results
@@ -228,6 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Show all players, not just top N")
     p.add_argument("--compact", action="store_true",
                    help="Compact view: hide SG breakdown, show rank/player/score/aux stats only")
+    p.add_argument("--debug-stats", action="store_true",
+                   help="Print debug info about PGA Tour stat fetching (name matching)")
 
     wg = p.add_argument_group(
         "Weight overrides",
@@ -676,6 +681,7 @@ def main():
     console.print()
 
     # --- Weekly PGA Tour stats ---
+    debug_stats = getattr(args, "debug_stats", False)
     stat_configs = []
     season_weight = 0.6
     weekly = load_weekly_stats()
@@ -683,8 +689,12 @@ def main():
         stat_configs, season_weight = weekly
     if stat_configs:
         with console.status("[cyan]Fetching PGA Tour weekly stats…[/cyan]"):
-            stat_dfs = fetch_weekly_stats(stat_configs)
+            stat_dfs = fetch_weekly_stats(stat_configs, debug=debug_stats)
         if stat_dfs:
+            if debug_stats:
+                from datagolf.pgatour import _normalize_name
+                sample_dg = [_normalize_name(str(n)) for n in df["player_name"].head(3) if pd.notna(n)]
+                console.print(f"[dim]  DG normalized sample names: {sample_dg}[/dim]")
             df = merge_weekly_stats(df, stat_dfs)
 
     # --- DraftKings outright odds (TODO: parse once endpoint confirmed) ---
