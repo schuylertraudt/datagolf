@@ -675,6 +675,19 @@ def main():
             console.print(f"[yellow]Warning:[/yellow] Could not fetch DK outright odds: {exc}")
             outrights_raw = None
 
+    # --- Probe DataGolf traditional stats availability ---
+    from datagolf.client import TRADITIONAL_STATS
+    with console.status("[cyan]Probing DataGolf traditional stats…[/cyan]"):
+        try:
+            trad_raw = client.get_live_tournament_stats(tour=args.tour, stats=TRADITIONAL_STATS)
+            players = trad_raw.get("live_stats") or trad_raw.get("data") or []
+            if players:
+                console.print(f"[dim]DEBUG trad stats sample player: {repr(players[0])[:400]}[/dim]")
+            else:
+                console.print(f"[dim]DEBUG trad stats keys: {list(trad_raw.keys())}[/dim]")
+        except Exception as exc:
+            console.print(f"[dim]DEBUG trad stats error: {exc}[/dim]")
+
     top_n = 0 if args.all else args.top
     display_rankings(
         df, top_n,

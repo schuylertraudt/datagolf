@@ -7,6 +7,9 @@ BASE_URL = "https://feeds.datagolf.com"
 # All SG stats available from the live-tournament-stats endpoint
 LIVE_STATS = "sg_ott,sg_app,sg_arg,sg_putt,sg_t2g,sg_total"
 
+# Traditional stats to probe (may be available depending on API tier)
+TRADITIONAL_STATS = "driving_dist,driving_acc,gir,scrambling,prox_fw,prox_rgh"
+
 
 class DataGolfClient:
     def __init__(self, api_key: str):
