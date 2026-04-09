@@ -165,8 +165,10 @@ def _fetch(settings: dict) -> dict:
 
     # Matchups
     matchups_html = ""
+    matchup_round = ""
     try:
         mu_raw = client.get_matchups(tour=tour)
+        matchup_round = str(mu_raw.get("round_num") or mu_raw.get("round") or "")
         mu_df = parse_matchups(mu_raw, model_df=df)
         if not mu_df.empty:
             matchups_html = _matchups_to_html(mu_df)
@@ -185,6 +187,7 @@ def _fetch(settings: dict) -> dict:
         "extra_col_headers": extra_cols,
         "has_dk": bool(dk_map),
         "matchups_html": matchups_html,
+        "matchup_round": matchup_round,
         "weights": weights,
         "history": history,
     }
@@ -297,72 +300,120 @@ def _fmt_odds(v):
 def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
-    edge_mask = (
-        (mu_df["p1_edge"].fillna(0) >= min_edge) |
-        (mu_df["p2_edge"].fillna(0) >= min_edge)
-    )
-    show_df = mu_df[edge_mask].copy() if has_model else mu_df.copy()
+    # Group rows by matchup pair, collecting all books
+    pair_data: dict = {}
+    for _, r in mu_df.iterrows():
+        key = (r["p1_name"], r["p2_name"])
+        if key not in pair_data:
+            pair_data[key] = {
+                "p1_our_prob": r.get("p1_our_prob"),
+                "p2_our_prob": r.get("p2_our_prob"),
+                "p1_edge": r.get("p1_edge"),
+                "p2_edge": r.get("p2_edge"),
+                "max_edge": float(r.get("max_edge") or 0),
+                "books": {},
+            }
+        book = r.get("book") or ""
+        if book:
+            pair_data[key]["books"][book] = {
+                "p1_odds": r.get("p1_book_odds"),
+                "p2_odds": r.get("p2_book_odds"),
+            }
 
-    if show_df.empty:
+    sorted_pairs = sorted(pair_data.items(), key=lambda x: x[1]["max_edge"], reverse=True)
+    if has_model:
+        sorted_pairs = [(k, v) for k, v in sorted_pairs if v["max_edge"] >= min_edge]
+
+    if not sorted_pairs:
         return "<p class='dim'>No matchups with edge ≥ 3%. Try refreshing after round starts.</p>"
 
-    show_df = (
-        show_df.sort_values("max_edge", ascending=False)
-        .drop_duplicates(subset=["p1_name", "p2_name"], keep="first")
-    )
+    # Collect books in order of first appearance
+    all_books: list = []
+    seen_books: set = set()
+    for _, v in sorted_pairs:
+        for b in v["books"]:
+            if b not in seen_books:
+                seen_books.add(b)
+                all_books.append(b)
 
-    rows = []
-    for _, r in show_df.iterrows():
-        p1e = r.get("p1_edge")
-        p2e = r.get("p2_edge")
+    # Book filter dropdown + JS
+    options = '<option value="all">All Books</option>\n'
+    for b in all_books:
+        options += f'      <option value="{b}">{b.title()}</option>\n'
 
-        p1_cls = " pos bold" if (p1e is not None and p1e >= min_edge) else ""
-        p2_cls = " pos bold" if (p2e is not None and p2e >= min_edge) else ""
+    filter_html = f"""<div class="filter-bar">
+  <label for="bookFilter">Filter by book:</label>
+  <select id="bookFilter" onchange="filterByBook(this.value)">
+    {options}  </select>
+</div>
+<script>
+function filterByBook(book) {{
+  document.querySelectorAll('.mu-card').forEach(function(card) {{
+    if (book === 'all') {{
+      card.style.display = '';
+    }} else {{
+      var books = (card.dataset.books || '').split(' ');
+      card.style.display = books.indexOf(book) >= 0 ? '' : 'none';
+    }}
+  }});
+}}
+</script>"""
 
-        if has_model:
-            if p1e is not None and p2e is not None and p1e >= min_edge and p1e >= p2e:
-                bet = f"<span class='pos bold'>→ {r['p1_name']}</span>"
-            elif p2e is not None and p2e >= min_edge:
-                bet = f"<span class='pos bold'>→ {r['p2_name']}</span>"
-            else:
-                bet = "<span class='dim'>—</span>"
-        else:
-            bet = ""
+    def _fe(v):
+        if v is None:
+            return "<span class='dim'>-</span>"
+        s = f"{v * 100:+.1f}%"
+        return f"<span class='pos'>{s}</span>" if v >= min_edge else f"<span class='dim neg'>{s}</span>"
 
-        def _fe(v):
-            if v is None:
-                return "<span class='dim'>-</span>"
-            s = f"{v*100:+.1f}%"
-            return f"<span class='pos'>{s}</span>" if v >= min_edge else f"<span class='dim'>{s}</span>"
+    cards = []
+    for (p1, p2), v in sorted_pairs:
+        p1e = v["p1_edge"]
+        p2e = v["p2_edge"]
+        p1_has_edge = p1e is not None and p1e >= min_edge
+        p2_has_edge = p2e is not None and p2e >= min_edge
+        books_attr = " ".join(v["books"].keys())
 
-        row = f"""
-        <tr>
-          <td class="name{p1_cls}">{r['p1_name']}</td>
-          <td class="name{p2_cls}">{r['p2_name']}</td>
-          <td>{r.get('book') or ''}</td>
-          <td>{_fmt_odds(r.get('p1_book_odds'))}</td>
-          <td>{_fmt_odds(r.get('p2_book_odds'))}</td>"""
-        if has_model:
-            row += f"""
-          <td>{_american(r.get('p1_our_prob'))}</td>
-          <td>{_american(r.get('p2_our_prob'))}</td>
-          <td>{_fe(p1e)}</td>
-          <td>{_fe(p2e)}</td>
-          <td>{bet}</td>"""
-        row += "</tr>"
-        rows.append(row)
+        # Book columns
+        book_cols_html = ""
+        for book, bdata in v["books"].items():
+            p1_line = _fmt_odds(bdata["p1_odds"])
+            p2_line = _fmt_odds(bdata["p2_odds"])
+            book_cols_html += f"""
+      <div class="book-col" data-book="{book}">
+        <div class="book-label">{book.title()}</div>
+        <div class="book-line">{p1_line}</div>
+        <div class="book-line">{p2_line}</div>
+      </div>"""
 
-    extra_headers = """
-      <th>Our A</th><th>Our B</th><th>Edge A</th><th>Edge B</th><th>Bet</th>""" if has_model else ""
+        # Our model + edge columns
+        model_html = ""
+        if has_model and v["p1_our_prob"] is not None:
+            model_html = f"""
+      <div class="book-col model-col">
+        <div class="book-label">Our Model</div>
+        <div class="book-line">{_american(v['p1_our_prob'])}</div>
+        <div class="book-line">{_american(v['p2_our_prob'])}</div>
+      </div>
+      <div class="book-col edge-col">
+        <div class="book-label">Edge</div>
+        <div class="book-line">{_fe(p1e)}</div>
+        <div class="book-line">{_fe(p2e)}</div>
+      </div>"""
 
-    return f"""
-    <table>
-      <thead><tr>
-        <th>Player A</th><th>Player B</th><th>Book</th>
-        <th>Line A</th><th>Line B</th>{extra_headers}
-      </tr></thead>
-      <tbody>{"".join(rows)}</tbody>
-    </table>"""
+        p1_cls = "mu-player player-edge" if p1_has_edge else "mu-player"
+        p2_cls = "mu-player player-edge" if p2_has_edge else "mu-player"
+
+        cards.append(f"""
+    <div class="mu-card" data-books="{books_attr}">
+      <div class="mu-players">
+        <div class="{p1_cls}">{p1}</div>
+        <div class="{p2_cls}">{p2}</div>
+      </div>
+      <div class="mu-books">{book_cols_html}{model_html}
+      </div>
+    </div>""")
+
+    return filter_html + '\n<div class="mu-grid">' + "".join(cards) + "\n</div>"
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +441,23 @@ _CSS = """
   .nav-btn { padding: 6px 14px; background: #2d3748; color: #a0aec0; border-radius: 4px; text-decoration: none; font-size: 12px; }
   .nav-btn:hover { background: #4a5568; }
   .nav-btn.active { background: #2b6cb0; color: #bee3f8; }
+  .round-badge { display: inline-block; background: #2b6cb0; color: #bee3f8; padding: 3px 12px; border-radius: 12px; font-size: 12px; margin-bottom: 16px; }
+  .filter-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .filter-bar label { color: #a0aec0; font-size: 12px; }
+  .filter-bar select { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+  .mu-grid { display: flex; flex-direction: column; gap: 8px; }
+  .mu-card { background: #1a202c; border: 1px solid #2d3748; border-radius: 8px; padding: 12px 16px; display: flex; align-items: center; gap: 20px; }
+  .mu-card:hover { border-color: #4a5568; }
+  .mu-players { display: flex; flex-direction: column; gap: 10px; min-width: 160px; flex-shrink: 0; }
+  .mu-player { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  .player-edge { color: #68d391; font-weight: 600; }
+  .mu-books { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .book-col { display: flex; flex-direction: column; gap: 6px; min-width: 64px; }
+  .book-label { color: #718096; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .book-line { text-align: right; font-size: 13px; }
+  .model-col .book-line { color: #90cdf4; }
+  .edge-col .book-line { font-weight: 500; }
+  span.neg { color: #4a5568; }
 """
 
 RANKINGS_TEMPLATE = """<!DOCTYPE html>
@@ -450,6 +518,10 @@ MATCHUPS_TEMPLATE = """<!DOCTYPE html>
     <a class="nav-btn" href="/matchups/refresh">↻ Refresh</a>
   </nav>
 
+  {% if matchup_round %}
+  <div class="round-badge">Round {{ matchup_round }}</div>
+  {% endif %}
+
   {% if matchups_html %}
   {{ matchups_html | safe }}
   {% else %}
@@ -496,6 +568,7 @@ def matchups():
         cached_at=data.get("cached_at", "—"),
         error=data.get("error"),
         matchups_html=data.get("matchups_html", ""),
+        matchup_round=data.get("matchup_round", ""),
     )
 
 
