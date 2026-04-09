@@ -308,7 +308,7 @@ _BOOK_DISPLAY = {
 }
 
 
-def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
+def _matchups_to_html(mu_df, min_edge: float = 0.05) -> str:
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
     # Group rows by matchup pair, collecting all books
@@ -336,7 +336,7 @@ def _matchups_to_html(mu_df, min_edge: float = 0.03) -> str:
         sorted_pairs = [(k, v) for k, v in sorted_pairs if v["max_edge"] >= min_edge]
 
     if not sorted_pairs:
-        return "<p class='dim'>No matchups with edge ≥ 3%. Try refreshing after round starts.</p>"
+        return "<p class='dim'>No matchups with edge ≥ 5%. Try refreshing after round starts.</p>"
 
     # Collect books in order of first appearance
     all_books: list = []

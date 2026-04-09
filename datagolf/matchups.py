@@ -1,17 +1,24 @@
 """
 Matchup edge calculator.
 
-Compares our model's head-to-head probabilities (derived from model_win_prob
-via Bradley-Terry) against the market's implied probabilities from DraftKings
-and FanDuel, as returned by the DataGolf betting-tools/matchups endpoint.
+Compares our model's head-to-head probabilities (derived from SG totals
+via a normal round-scoring model) against the market's implied probabilities
+from DraftKings, FanDuel, and other books, as returned by the DataGolf
+betting-tools/matchups endpoint.
 """
 
+import math
 from typing import Optional
 import pandas as pd
 import numpy as np
 
 
 KNOWN_BOOKS = ["draftkings", "fanduel", "betmgm", "bovada", "bet365", "pointsbet"]
+
+# Empirical PGA Tour single-round score standard deviation (strokes).
+# A player's actual round score = expected_score + noise, where noise ~ N(0, ROUND_STD_DEV).
+# For a head-to-head score differential, the combined std dev is sqrt(2) * ROUND_STD_DEV.
+ROUND_STD_DEV = 2.9
 
 
 def remove_vig(p1_raw: float, p2_raw: float) -> tuple[float, float]:
@@ -46,10 +53,32 @@ def prob_to_american(prob: float) -> str:
     return f"+{int(round(((1 - prob) / prob) * 100))}"
 
 
+def round_matchup_prob(sg_a: float, sg_b: float) -> tuple[float, float]:
+    """
+    Compute head-to-head round matchup probability using a normal distribution
+    over expected round score differential.
+
+    sg_a, sg_b: strokes-gained totals (strokes per round relative to average field).
+    P(A beats B) = Φ( (sg_a − sg_b) / (√2 × ROUND_STD_DEV) )
+
+    Uses math.erfc from stdlib — no scipy required.
+    Returns (p_a_wins, p_b_wins).
+    """
+    diff = sg_a - sg_b
+    h2h_std = ROUND_STD_DEV * math.sqrt(2)  # combined std dev of score differential
+    # Normal CDF: Φ(x) = 0.5 * erfc(-x / sqrt(2))
+    p_a = 0.5 * math.erfc(-diff / (h2h_std * math.sqrt(2)))
+    return p_a, 1.0 - p_a
+
+
 def bradley_terry(p1_win_prob: float, p2_win_prob: float) -> tuple[float, float]:
     """
     Derive head-to-head matchup probabilities from overall win probabilities
     using the Bradley-Terry model: P(A beats B) = P_A / (P_A + P_B).
+
+    NOTE: this is kept for reference but should NOT be used for round matchups —
+    tournament win probabilities are a poor input for single-round H2H models.
+    Use round_matchup_prob() instead.
     """
     total = p1_win_prob + p2_win_prob
     if total <= 0:
@@ -74,13 +103,17 @@ def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.Dat
     if not matchups:
         return pd.DataFrame()
 
-    # Build model lookup keyed by normalized name (handles First Last and Last, First)
-    model_lookup: dict = {}
-    if model_df is not None and "model_win_prob" in model_df.columns:
+    # Build SG total lookup keyed by normalized name.
+    # We use sg_total (strokes gained per round) as the input to our round-scoring model,
+    # NOT tournament win probability. Win prob is for a 4-round field event; sg_total
+    # directly predicts single-round scoring.
+    sg_lookup: dict = {}
+    if model_df is not None and "sg_total" in model_df.columns:
         for _, r in model_df.iterrows():
             name = (r.get("player_name") or "").strip()
-            if name:
-                model_lookup[_normalize_name(name)] = r["model_win_prob"]
+            sg = r.get("sg_total")
+            if name and sg is not None and not pd.isna(sg):
+                sg_lookup[_normalize_name(name)] = float(sg)
 
     rows = []
     for m in matchups:
@@ -99,11 +132,13 @@ def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.Dat
         else:
             p1_dg_fair = p2_dg_fair = None
 
-        # Our model's matchup probability via Bradley-Terry
-        p1_model = model_lookup.get(_normalize_name(p1_name))
-        p2_model = model_lookup.get(_normalize_name(p2_name))
-        if p1_model is not None and p2_model is not None:
-            p1_our, p2_our = bradley_terry(p1_model, p2_model)
+        # Our model's matchup probability via round-scoring normal distribution.
+        # Uses sg_total (strokes gained/round) directly — more appropriate than
+        # running tournament win probabilities through Bradley-Terry.
+        p1_sg = sg_lookup.get(_normalize_name(p1_name))
+        p2_sg = sg_lookup.get(_normalize_name(p2_name))
+        if p1_sg is not None and p2_sg is not None:
+            p1_our, p2_our = round_matchup_prob(p1_sg, p2_sg)
         else:
             p1_our = p2_our = None
 
