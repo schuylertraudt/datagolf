@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Introspect OverviewStat and StatCategoryConfig to find stat ID/title fields."""
+"""Build full stat catalog via statLeaders across all StatCategory enum values."""
 import json
 import requests
 
@@ -18,36 +18,53 @@ def gql(query, variables=None):
     resp.raise_for_status()
     return resp.json()
 
-def type_fields(type_name):
-    d = gql(f'{{ __type(name: "{type_name}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
-    return [(f["name"], f["type"]) for f in ((d.get("data") or {}).get("__type") or {}).get("fields") or []]
+CATEGORIES = [
+    'APPROACH_GREEN', 'AROUND_GREEN', 'MONEY_FINISHES', 'OFF_TEE',
+    'POINTS_RANKINGS', 'PUTTING', 'SCORING', 'STREAKS',
+    'STROKES_GAINED', 'FACTS_AND_FIGURES', 'PACE_OF_PLAY'
+]
 
-for t in ["OverviewStat", "StatCategoryConfig"]:
-    print(f"\n=== {t} fields ===")
-    for name, typ in type_fields(t):
-        print(f"  {name}: {typ}")
+# 1. Find subCategories element type
+print("=== Introspect subCategories element type ===")
+d = gql("""
+{
+  statLeaders(tourCode: R, category: STROKES_GAINED) {
+    categoryHeader
+    subCategories { __typename }
+  }
+}
+""")
+result = ((d.get("data") or {}).get("statLeaders") or {})
+subs = result.get("subCategories") or []
+print(f"categoryHeader: {result.get('categoryHeader')}")
+print(f"subCategories count: {len(subs)}, first typename: {subs[0] if subs else 'none'}")
 
-# Also check subCategories element type inside StatLeaderCategory
-print("\n=== StatLeaderCategory.subCategories element type ===")
-d = gql('{ __type(name: "StatLeaderCategory") { fields { name type { name kind ofType { name kind ofType { name kind } } } } } }')
-fields = ((d.get("data") or {}).get("__type") or {}).get("fields") or []
-for f in fields:
-    if f["name"] in ("subCategories", "otherCategories"):
+# 2. Get element type fields
+sub_typename = subs[0].get("__typename") if subs else None
+if sub_typename:
+    print(f"\n=== {sub_typename} fields ===")
+    d2 = gql(f'{{ __type(name: "{sub_typename}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}')
+    fields = ((d2.get("data") or {}).get("__type") or {}).get("fields") or []
+    for f in fields:
         print(f"  {f['name']}: {f['type']}")
 
-# Try calling statLeaders with subCategories
-print("\n=== statLeaders subCategories introspect ===")
-sub_type = None
-for f in fields:
-    if f["name"] == "subCategories":
-        t = f["type"]
-        # Drill down through NON_NULL/LIST wrappers
-        while t and not t.get("name"):
-            t = t.get("ofType")
-        sub_type = t.get("name") if t else None
-        break
-
-if sub_type:
-    print(f"  subCategories element type: {sub_type}")
-    for name, typ in type_fields(sub_type):
-        print(f"    {name}: {typ}")
+    # 3. Try fetching with likely stat fields
+    print(f"\n=== statLeaders subCategories with stat fields ===")
+    for field_combo in ["statId statTitle", "statId title", "statId name", "statId displayTitle"]:
+        try:
+            d3 = gql(f"""
+            {{
+              statLeaders(tourCode: R, category: STROKES_GAINED) {{
+                categoryHeader
+                subCategories {{ {field_combo} }}
+              }}
+            }}
+            """)
+            if not d3.get("errors"):
+                subs2 = ((d3.get("data") or {}).get("statLeaders") or {}).get("subCategories") or []
+                print(f"  Fields '{field_combo}' worked! {len(subs2)} subcategories, first 3: {subs2[:3]}")
+                break
+            else:
+                print(f"  '{field_combo}': {d3['errors'][0]['message'][:80]}")
+        except Exception as e:
+            print(f"  '{field_combo}': error {e}")
