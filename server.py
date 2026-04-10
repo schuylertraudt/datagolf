@@ -657,10 +657,6 @@ RANKINGS_TEMPLATE = """<!DOCTYPE html>
     <a class="nav-btn" href="/refresh">↻ Refresh</a>
   </nav>
 
-  {% if regression_html %}
-  {{ regression_html | safe }}
-  {% endif %}
-
   <table>
     <thead><tr>
       <th>#</th><th>Player</th>
@@ -709,6 +705,10 @@ MATCHUPS_TEMPLATE = """<!DOCTYPE html>
   <p class="meta">No matchup data available for this round yet. Try refreshing once the round starts.</p>
   {% endif %}
 
+  {% if regression_html %}
+  {{ regression_html | safe }}
+  {% endif %}
+
   <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
 </body>
 </html>"""
@@ -736,7 +736,6 @@ def index():
         rankings_html=data.get("rankings_html", ""),
         weights_str=weights_str,
         extra_col_headers=data.get("extra_col_headers", []),
-        regression_html=data.get("regression_html", ""),
     )
 
 
@@ -752,6 +751,7 @@ def matchups():
         matchups_html=data.get("matchups_html", ""),
         matchup_round=data.get("matchup_round", ""),
         matchup_no_data=data.get("matchup_no_data", False),
+        regression_html=data.get("regression_html", ""),
     )
 
 
