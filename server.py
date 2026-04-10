@@ -764,6 +764,57 @@ def api_data():
     })
 
 
+@app.route("/debug/regression")
+def debug_regression():
+    """Diagnose the putting regression pipeline."""
+    import traceback as _tb
+    from dotenv import load_dotenv as _lde
+    _lde()
+    api_key = os.getenv("DATAGOLF_API_KEY")
+    result = {}
+    try:
+        client = DataGolfClient(api_key)
+        settings = load_settings()
+        tour = settings.get("tour", "pga")
+
+        # Step 1: live stats fetch
+        try:
+            live_raw = client.get_live_tournament_stats(tour=tour, round="event", display="value")
+            result["live_round"] = live_raw.get("round_num") or live_raw.get("round")
+            result["live_keys"] = list(live_raw.keys())
+            players = live_raw.get("live_stats") or []
+            result["live_player_count"] = len(players)
+            if players:
+                sample = players[0]
+                result["live_sample_keys"] = list(sample.keys())
+                result["live_sample_name"] = sample.get("player_name")
+                result["live_sample_sg_putt"] = sample.get("sg_putt")
+                result["live_sample_sg_t2g"] = sample.get("sg_t2g")
+                # check nested stats
+                if "stats" in sample and isinstance(sample["stats"], list):
+                    result["live_stats_nested"] = True
+                    result["live_stats_keys"] = [s.get("stat") or s.get("stat_name") for s in sample["stats"]]
+                else:
+                    result["live_stats_nested"] = False
+        except Exception as e:
+            result["live_fetch_error"] = str(e)
+
+        # Step 2: model df
+        try:
+            data = get_data()
+            result["matchup_round"] = data.get("matchup_round")
+            result["live_round_cache"] = data.get("live_round")
+            result["regression_html_len"] = len(data.get("regression_html") or "")
+            result["regression_html_preview"] = (data.get("regression_html") or "")[:200]
+        except Exception as e:
+            result["cache_error"] = str(e)
+
+    except Exception as e:
+        result["error"] = _tb.format_exc()
+
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     print(f"Starting DataGolf rankings server on http://0.0.0.0:{port}")
