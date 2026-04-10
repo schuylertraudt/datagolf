@@ -419,7 +419,6 @@ _BOOK_DISPLAY = {
     "unibet":     "BetRivers",
     "caesars":    "Caesars",
     "betmgm":     "BetMGM",
-    "pointsbet":  "Fanatics",
 }
 
 
