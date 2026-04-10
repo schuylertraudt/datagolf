@@ -472,21 +472,33 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
     round_label = f"Round {matchup_round}" if matchup_round else "this round"
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
-    # Group rows by matchup pair, collecting all books
+    # Group rows by matchup pair, collecting all books.
+    # Edge is only stored from displayable books so the displayed numbers are consistent.
     pair_data: dict = {}
     for _, r in mu_df.iterrows():
         key = (r["p1_name"], r["p2_name"])
+        book = r.get("book") or ""
+        is_displayable = bool(book and book in _BOOK_DISPLAY)
+
         if key not in pair_data:
             pair_data[key] = {
                 "p1_our_prob": r.get("p1_our_prob"),
                 "p2_our_prob": r.get("p2_our_prob"),
-                "p1_edge": r.get("p1_edge"),
-                "p2_edge": r.get("p2_edge"),
-                "max_edge": float(r.get("max_edge") or 0),
+                # Seed edge only if this first row is from a displayable book
+                "p1_edge": r.get("p1_edge") if is_displayable else None,
+                "p2_edge": r.get("p2_edge") if is_displayable else None,
+                "max_edge": float(r.get("max_edge") or 0) if is_displayable else 0.0,
                 "books": {},
             }
-        book = r.get("book") or ""
-        if book and book in _BOOK_DISPLAY:
+        elif is_displayable:
+            # Update edge if this displayable book gives a better max edge
+            new_max = float(r.get("max_edge") or 0)
+            if new_max > pair_data[key]["max_edge"]:
+                pair_data[key]["p1_edge"] = r.get("p1_edge")
+                pair_data[key]["p2_edge"] = r.get("p2_edge")
+                pair_data[key]["max_edge"] = new_max
+
+        if is_displayable:
             pair_data[key]["books"][book] = {
                 "p1_odds": r.get("p1_book_odds"),
                 "p2_odds": r.get("p2_book_odds"),
