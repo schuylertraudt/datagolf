@@ -219,7 +219,7 @@ def _fetch(settings: dict) -> dict:
                     except Exception: return None
                 live_sg[name] = {"live_sg_putt": _sf(p.get("sg_putt")), "live_sg_t2g": _sf(p.get("sg_t2g"))}
 
-        if live_sg and live_round >= 2:
+        if live_sg and live_round >= 1:
             live_df_rows = [
                 {"player_name": n, "live_sg_putt": v["live_sg_putt"], "live_sg_t2g": v["live_sg_t2g"]}
                 for n, v in live_sg.items()
@@ -438,8 +438,8 @@ def _regression_to_html(reg_df, live_round: int) -> str:
         </tr>""")
 
     return f"""
-    <div class="reg-header">Putting Regression Targets — Round {live_round}</div>
-    <p class="reg-meta">Historically strong putters underperforming with the flat stick this week, while creating birdie looks tee-to-green. These players are factored into matchup edges.</p>
+    <div class="reg-header">Putting Regression Targets — After Round {live_round}</div>
+    <p class="reg-meta">Historically strong putters underperforming with the flat stick so far this week, while creating birdie looks tee-to-green. These players receive a boost in matchup edge calculations.</p>
     <table class="reg-table">
       <thead><tr>
         <th>Player</th><th>Hist SG:P</th><th>Live SG:P</th><th>Gap</th><th>Live T2G</th>
