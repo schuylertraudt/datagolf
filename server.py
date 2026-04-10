@@ -195,15 +195,22 @@ def _fetch(settings: dict) -> dict:
     _PUTT_REGRESSION_FACTOR = 0.10  # max ~0.20 stroke boost to matchup_sg
     try:
         import pandas as _pd3
+        from datagolf.matchups import _normalize_name as _nn
         live_raw = client.get_live_tournament_stats(tour=tour, round="event", display="value")
-        live_round = int(live_raw.get("round_num") or live_raw.get("round") or 0)
+        # API uses 'stat_round' not 'round_num'; fall back to 1 if we have player data
+        _sr = live_raw.get("round_num") or live_raw.get("round") or live_raw.get("stat_round") or 0
+        try:
+            live_round = int(_sr)
+        except (ValueError, TypeError):
+            live_round = 0
 
-        # Parse live sg_putt and sg_t2g per player
+        # Parse live sg_putt and sg_t2g; key by normalized name to handle "Last, First" format
         live_sg: dict = {}
         for p in (live_raw.get("live_stats") or []):
-            name = (p.get("player_name") or "").strip()
-            if not name:
+            raw_name = (p.get("player_name") or "").strip()
+            if not raw_name:
                 continue
+            norm = _nn(raw_name)  # handles "Burns, Sam" → "sam burns"
             if "stats" in p and isinstance(p["stats"], list):
                 sg_map: dict = {}
                 for s in p["stats"]:
@@ -212,20 +219,26 @@ def _fetch(settings: dict) -> dict:
                         sg_map[k] = float(s.get("value") or 0)
                     except Exception:
                         pass
-                live_sg[name] = {"live_sg_putt": sg_map.get("sg_putt"), "live_sg_t2g": sg_map.get("sg_t2g")}
+                live_sg[norm] = {"live_sg_putt": sg_map.get("sg_putt"), "live_sg_t2g": sg_map.get("sg_t2g")}
             else:
                 def _sf(v):
                     try: return float(v)
                     except Exception: return None
-                live_sg[name] = {"live_sg_putt": _sf(p.get("sg_putt")), "live_sg_t2g": _sf(p.get("sg_t2g"))}
+                live_sg[norm] = {"live_sg_putt": _sf(p.get("sg_putt")), "live_sg_t2g": _sf(p.get("sg_t2g"))}
 
-        if live_sg and live_round >= 1:
+        # If round couldn't be parsed but we have players, we clearly have live data
+        if live_round == 0 and live_sg:
+            live_round = 1
+
+        if live_sg:
             live_df_rows = [
-                {"player_name": n, "live_sg_putt": v["live_sg_putt"], "live_sg_t2g": v["live_sg_t2g"]}
-                for n, v in live_sg.items()
+                {"_norm": k, "live_sg_putt": v["live_sg_putt"], "live_sg_t2g": v["live_sg_t2g"]}
+                for k, v in live_sg.items()
             ]
             live_merge = _pd3.DataFrame(live_df_rows)
-            df = df.merge(live_merge, on="player_name", how="left")
+            # Normalize model df names to match
+            df["_norm"] = df["player_name"].apply(lambda n: _nn(str(n)) if _pd3.notna(n) else "")
+            df = df.merge(live_merge, on="_norm", how="left").drop(columns=["_norm"])
 
             # putt_gap: positive means putting worse than historical average
             df["putt_gap_raw"] = df["sg_putt"] - df["live_sg_putt"]
@@ -248,7 +261,7 @@ def _fetch(settings: dict) -> dict:
             )
             reg = reg.sort_values("regression_signal", ascending=False).head(10)
             if not reg.empty:
-                regression_html = _regression_to_html(reg, live_round)
+                regression_html = _regression_to_html(reg, live_round or 1)
     except Exception:
         pass
 
