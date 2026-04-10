@@ -496,6 +496,10 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
     if has_model:
         sorted_pairs = [(k, v) for k, v in sorted_pairs if v["max_edge"] >= min_edge]
 
+    # Drop pairs where none of the books are in our display whitelist —
+    # edge would be computed from hidden books with no line context shown.
+    sorted_pairs = [(k, v) for k, v in sorted_pairs if v["books"]]
+
     if not sorted_pairs:
         return f"<p class='dim'>No matchups with edge ≥ 5% for {round_label}. Lines may not be posted yet, or the market is well-priced.</p>"
 
