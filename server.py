@@ -243,12 +243,19 @@ def _fetch(settings: dict) -> dict:
             # putt_gap: positive means putting worse than historical average
             df["putt_gap_raw"] = df["sg_putt"] - df["live_sg_putt"]
 
-            # Apply boost to matchup_sg (only for positive gaps; gated by live T2G)
-            putt_gap_pos = df["putt_gap_raw"].clip(lower=0)
+            # Upward boost: historically good putter running cold, gated by live T2G.
+            # They need to be creating birdie looks to capitalize on regression.
             # t2g_gate: 0→0, +0.5 SG T2G→1.0 (capped)
             t2g_gate = (df["live_sg_t2g"].fillna(0).clip(lower=0) / 0.5).clip(upper=1.0)
-            boost = _PUTT_REGRESSION_FACTOR * putt_gap_pos * t2g_gate
-            df["matchup_sg"] = df["matchup_sg"] + boost.fillna(0)
+            upward_boost = _PUTT_REGRESSION_FACTOR * df["putt_gap_raw"].clip(lower=0) * t2g_gate
+
+            # Downward penalty: player running hot on the putter, no T2G gate.
+            # Putting regression happens regardless of T2G — and a hot putter with
+            # poor T2G is converting a small number of looks at an unsustainable rate,
+            # making regression even more likely.
+            downward_penalty = _PUTT_REGRESSION_FACTOR * df["putt_gap_raw"].clip(upper=0)
+
+            df["matchup_sg"] = df["matchup_sg"] + upward_boost.fillna(0) + downward_penalty.fillna(0)
 
             # Regression targets: historically good putters with a meaningful gap
             reg = df[
