@@ -188,7 +188,17 @@ def _fetch(settings: dict) -> dict:
     except Exception:
         pass
 
-    # Live tournament stats — putting regression signal (Rounds 2+)
+    # Matchups — fetch first so matchup_round is available for the regression label
+    matchups_html = ""
+    matchup_round = ""
+    matchup_no_data = False
+    try:
+        mu_raw = client.get_matchups(tour=tour)
+        matchup_round = str(mu_raw.get("round_num") or mu_raw.get("round") or "")
+    except Exception:
+        matchup_no_data = True
+
+    # Live tournament stats — putting regression signal
     # Identifies historically strong putters who are cold this week but striking it well.
     live_round = 0
     regression_html = ""
@@ -197,7 +207,7 @@ def _fetch(settings: dict) -> dict:
         import pandas as _pd3
         from datagolf.matchups import _normalize_name as _nn
         live_raw = client.get_live_tournament_stats(tour=tour, round="event", display="value")
-        # API uses 'stat_round' not 'round_num'; fall back to 1 if we have player data
+        # stat_round returns "event" (the mode string), not a round number — use matchup_round - 1
         _sr = live_raw.get("round_num") or live_raw.get("round") or live_raw.get("stat_round") or 0
         try:
             live_round = int(_sr)
@@ -226,9 +236,12 @@ def _fetch(settings: dict) -> dict:
                     except Exception: return None
                 live_sg[norm] = {"live_sg_putt": _sf(p.get("sg_putt")), "live_sg_t2g": _sf(p.get("sg_t2g"))}
 
-        # If round couldn't be parsed but we have players, we clearly have live data
-        if live_round == 0 and live_sg:
-            live_round = 1
+        # Derive the completed round from matchup_round (next round) when API can't tell us
+        if live_round == 0:
+            try:
+                live_round = max(int(matchup_round) - 1, 1) if matchup_round else (1 if live_sg else 0)
+            except (ValueError, TypeError):
+                live_round = 1 if live_sg else 0
 
         if live_sg:
             live_df_rows = [
@@ -268,22 +281,18 @@ def _fetch(settings: dict) -> dict:
             )
             reg = reg.sort_values("regression_signal", ascending=False).head(10)
             if not reg.empty:
-                regression_html = _regression_to_html(reg, live_round or 1)
+                regression_html = _regression_to_html(reg, live_round)
     except Exception:
         pass
 
-    # Matchups
-    matchups_html = ""
-    matchup_round = ""
-    matchup_no_data = False
+    # Complete matchup parsing now that df has regression boosts applied
     try:
-        mu_raw = client.get_matchups(tour=tour)
-        matchup_round = str(mu_raw.get("round_num") or mu_raw.get("round") or "")
-        mu_df = parse_matchups(mu_raw, model_df=df)
-        if not mu_df.empty:
-            matchups_html = _matchups_to_html(mu_df, matchup_round=matchup_round)
-        else:
-            matchup_no_data = True
+        if not matchup_no_data:
+            mu_df = parse_matchups(mu_raw, model_df=df)
+            if not mu_df.empty:
+                matchups_html = _matchups_to_html(mu_df, matchup_round=matchup_round)
+            else:
+                matchup_no_data = True
     except Exception:
         matchup_no_data = True
 
