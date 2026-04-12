@@ -478,8 +478,21 @@ def _regression_to_html(reg_df, live_round: int) -> str:
 
 def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") -> str:
     import json as _json
+    import math as _math
+    import pandas as _pd
     round_label = f"Round {matchup_round}" if matchup_round else "this round"
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
+
+    def _safe(v):
+        """Convert pandas NaN/NA to Python None so downstream math stays clean."""
+        if v is None:
+            return None
+        try:
+            if _pd.isna(v):
+                return None
+        except Exception:
+            pass
+        return v
 
     # ---------------------------------------------------------------------------
     # Phase 1: collect raw per-book data for each matchup pair
@@ -491,24 +504,27 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
         is_displayable = bool(book and book in _BOOK_DISPLAY)
 
         if key not in pair_data:
+            p1_pin = _safe(r.get("p1_pin_prob"))
             pair_data[key] = {
-                "p1_our_prob": r.get("p1_our_prob"),
-                "p2_our_prob": r.get("p2_our_prob"),
-                "p1_pin_prob": r.get("p1_pin_prob"),
-                "p2_pin_prob": r.get("p2_pin_prob"),
-                "has_pin":     r.get("p1_pin_prob") is not None,
+                "p1_our_prob": _safe(r.get("p1_our_prob")),
+                "p2_our_prob": _safe(r.get("p2_our_prob")),
+                "p1_pin_prob": p1_pin,
+                "p2_pin_prob": _safe(r.get("p2_pin_prob")),
+                "has_pin":     p1_pin is not None,
                 "book_fairs":  {},   # {book: {p1, p2, p1_odds, p2_odds}}
                 "book_edges":  {},   # populated in phase 2
                 "max_edge":    0.0,
                 "books":       {},
             }
 
-        if is_displayable and r.get("p1_mkt_prob") is not None:
+        p1_mkt = _safe(r.get("p1_mkt_prob"))
+        p2_mkt = _safe(r.get("p2_mkt_prob"))
+        if is_displayable and p1_mkt is not None and p2_mkt is not None:
             pair_data[key]["book_fairs"][book] = {
-                "p1":      float(r["p1_mkt_prob"]),
-                "p2":      float(r["p2_mkt_prob"]),
-                "p1_odds": r.get("p1_book_odds"),
-                "p2_odds": r.get("p2_book_odds"),
+                "p1":      float(p1_mkt),
+                "p2":      float(p2_mkt),
+                "p1_odds": _safe(r.get("p1_book_odds")),
+                "p2_odds": _safe(r.get("p2_book_odds")),
             }
 
     # ---------------------------------------------------------------------------
@@ -572,7 +588,11 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
             v["books"][book] = {"p1_odds": fairs["p1_odds"], "p2_odds": fairs["p2_odds"]}
 
         ae = book_edges["all"]
-        v["max_edge"] = max(ae.get(s) or 0 for s in sigs)
+        v["max_edge"] = max(
+            (x if (x is not None and not _math.isnan(x)) else 0)
+            for s in sigs
+            for x in [ae.get(s)]
+        )
 
     sorted_pairs = sorted(pair_data.items(), key=lambda x: x[1]["max_edge"], reverse=True)
     if has_model:
@@ -644,6 +664,11 @@ function filterByBook(book) {{
     def _fe(val, threshold=None):
         if val is None:
             return "<span class='dim'>-</span>"
+        try:
+            if _math.isnan(val):
+                return "<span class='dim'>-</span>"
+        except (TypeError, ValueError):
+            pass
         t = threshold if threshold is not None else min_edge
         s = f"{val * 100:+.1f}%"
         return f"<span class='pos'>{s}</span>" if val >= t else f"<span class='dim neg'>{s}</span>"
@@ -654,7 +679,14 @@ function filterByBook(book) {{
         p1_best = v.get("p1_best_book")
         p2_best = v.get("p2_best_book")
         books_attr = " ".join(v["books"].keys())
-        edges_json = _json.dumps(v["book_edges"])
+        def _clean(obj):
+            """Recursively replace NaN/Inf with None so JSON.parse never throws."""
+            if isinstance(obj, dict):
+                return {k: _clean(v2) for k, v2 in obj.items()}
+            if isinstance(obj, float) and (_math.isnan(obj) or _math.isinf(obj)):
+                return None
+            return obj
+        edges_json = _json.dumps(_clean(v["book_edges"]))
 
         p1_has_edge = any(ae.get(k) is not None and ae[k] >= min_edge
                           for k in ("p1_vs_our", "p1_vs_pin", "p1_vs_mkt"))
