@@ -480,9 +480,10 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
     round_label = f"Round {matchup_round}" if matchup_round else "this round"
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
-    # Group rows by matchup pair, collecting all books.
-    # Pinnacle edge is the primary signal (sharp market reference).
-    # Soft-book edge is stored as fallback when Pinnacle data isn't available.
+    # Group rows by matchup pair, collecting all books and tracking three edge signals:
+    #   vs. Mdl  — our model prob minus soft-book fair prob (best across displayed books)
+    #   vs. PIN  — our model prob minus Pinnacle fair prob (sharp market reference)
+    #   Sharp Δ  — Pinnacle fair prob minus soft-book fair prob (pure line-shopping signal)
     pair_data: dict = {}
     for _, r in mu_df.iterrows():
         key = (r["p1_name"], r["p2_name"])
@@ -490,39 +491,66 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
         is_displayable = bool(book and book in _BOOK_DISPLAY)
 
         if key not in pair_data:
-            # Pinnacle edge is matchup-level (same across all book rows for this pair)
             p1_pe = r.get("p1_pin_edge")
             p2_pe = r.get("p2_pin_edge")
             has_pin = p1_pe is not None or p2_pe is not None
-            pin_max = max(p1_pe if p1_pe is not None else 0, p2_pe if p2_pe is not None else 0)
             pair_data[key] = {
-                "p1_our_prob":  r.get("p1_our_prob"),
-                "p2_our_prob":  r.get("p2_our_prob"),
-                "p1_pin_prob":  r.get("p1_pin_prob"),
-                "p2_pin_prob":  r.get("p2_pin_prob"),
-                "p1_pin_edge":  p1_pe,
-                "p2_pin_edge":  p2_pe,
-                "has_pin":      has_pin,
-                # Soft-book edges (fallback); seed only from displayable books
-                "p1_edge": r.get("p1_edge") if is_displayable else None,
-                "p2_edge": r.get("p2_edge") if is_displayable else None,
-                # max_edge drives sorting and the ≥5% filter
-                "max_edge": pin_max if has_pin else (float(r.get("max_edge") or 0) if is_displayable else 0.0),
-                "books": {},
+                "p1_our_prob":      r.get("p1_our_prob"),
+                "p2_our_prob":      r.get("p2_our_prob"),
+                "p1_pin_prob":      r.get("p1_pin_prob"),
+                "p2_pin_prob":      r.get("p2_pin_prob"),
+                "p1_pin_edge":      p1_pe,
+                "p2_pin_edge":      p2_pe,
+                "has_pin":          has_pin,
+                "p1_vs_model_best": None,   # best (our_prob − soft_fair) across displayed books
+                "p2_vs_model_best": None,
+                "p1_vs_mkt_best":   None,   # best (pin_fair − soft_fair) across displayed books
+                "p2_vs_mkt_best":   None,
+                "max_edge":         0.0,
+                "books":            {},
             }
-        elif is_displayable and not pair_data[key]["has_pin"]:
-            # No Pinnacle: update soft-book edge if this book gives a better number
-            new_max = float(r.get("max_edge") or 0)
-            if new_max > pair_data[key]["max_edge"]:
-                pair_data[key]["p1_edge"] = r.get("p1_edge")
-                pair_data[key]["p2_edge"] = r.get("p2_edge")
-                pair_data[key]["max_edge"] = new_max
 
         if is_displayable:
+            p1_edge    = r.get("p1_edge")
+            p2_edge    = r.get("p2_edge")
+            p1_pin_fair = r.get("p1_pin_prob")
+            p2_pin_fair = r.get("p2_pin_prob")
+            p1_mkt_fair = r.get("p1_mkt_prob")
+            p2_mkt_fair = r.get("p2_mkt_prob")
+
+            # vs. Model: our model vs. this soft book
+            if p1_edge is not None:
+                curr = pair_data[key]["p1_vs_model_best"]
+                if curr is None or p1_edge > curr:
+                    pair_data[key]["p1_vs_model_best"] = p1_edge
+            if p2_edge is not None:
+                curr = pair_data[key]["p2_vs_model_best"]
+                if curr is None or p2_edge > curr:
+                    pair_data[key]["p2_vs_model_best"] = p2_edge
+
+            # Sharp Δ: where PIN > soft-book implied prob (soft book underpriced vs. sharp market)
+            if p1_pin_fair is not None and p1_mkt_fair is not None:
+                p1_vm = p1_pin_fair - p1_mkt_fair
+                curr = pair_data[key]["p1_vs_mkt_best"]
+                if curr is None or p1_vm > curr:
+                    pair_data[key]["p1_vs_mkt_best"] = p1_vm
+            if p2_pin_fair is not None and p2_mkt_fair is not None:
+                p2_vm = p2_pin_fair - p2_mkt_fair
+                curr = pair_data[key]["p2_vs_mkt_best"]
+                if curr is None or p2_vm > curr:
+                    pair_data[key]["p2_vs_mkt_best"] = p2_vm
+
             pair_data[key]["books"][book] = {
                 "p1_odds": r.get("p1_book_odds"),
                 "p2_odds": r.get("p2_book_odds"),
             }
+
+    # Post-process: max_edge = max across all three signals (drives sort + filter)
+    for v in pair_data.values():
+        pin_max = max(v["p1_pin_edge"] or 0, v["p2_pin_edge"] or 0) if v["has_pin"] else 0
+        mdl_max = max(v["p1_vs_model_best"] or 0, v["p2_vs_model_best"] or 0)
+        mkt_max = max(v["p1_vs_mkt_best"] or 0, v["p2_vs_mkt_best"] or 0)
+        v["max_edge"] = max(pin_max, mdl_max, mkt_max)
 
     sorted_pairs = sorted(pair_data.items(), key=lambda x: x[1]["max_edge"], reverse=True)
     if has_model:
@@ -535,9 +563,7 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
     if not sorted_pairs:
         return f"<p class='dim'>No matchups with edge ≥ 5% for {round_label}. Lines may not be posted yet, or the market is well-priced.</p>"
 
-    # Determine if Pinnacle data is present for any matchup (drives edge column label)
     has_pin_data = any(v.get("has_pin") for _, v in sorted_pairs)
-    edge_label = "vs. PIN" if has_pin_data else "Edge"
 
     # Collect books in order of first appearance
     all_books: list = []
@@ -572,23 +598,25 @@ function filterByBook(book) {{
 }}
 </script>"""
 
-    def _fe(v):
-        if v is None:
+    def _fe(val, threshold=None):
+        if val is None:
             return "<span class='dim'>-</span>"
-        s = f"{v * 100:+.1f}%"
-        return f"<span class='pos'>{s}</span>" if v >= min_edge else f"<span class='dim neg'>{s}</span>"
+        t = threshold if threshold is not None else min_edge
+        s = f"{val * 100:+.1f}%"
+        return f"<span class='pos'>{s}</span>" if val >= t else f"<span class='dim neg'>{s}</span>"
 
     cards = []
     for (p1, p2), v in sorted_pairs:
-        # Use Pinnacle edge if available; fall back to soft-book edge
-        if v.get("has_pin"):
-            p1e = v["p1_pin_edge"]
-            p2e = v["p2_pin_edge"]
-        else:
-            p1e = v["p1_edge"]
-            p2e = v["p2_edge"]
-        p1_has_edge = p1e is not None and p1e >= min_edge
-        p2_has_edge = p2e is not None and p2e >= min_edge
+        p1_vs_model = v.get("p1_vs_model_best")
+        p2_vs_model = v.get("p2_vs_model_best")
+        p1_vs_pin   = v.get("p1_pin_edge")
+        p2_vs_pin   = v.get("p2_pin_edge")
+        p1_vs_mkt   = v.get("p1_vs_mkt_best")
+        p2_vs_mkt   = v.get("p2_vs_mkt_best")
+
+        # Highlight player name green if any signal is positive
+        p1_has_edge = any(x is not None and x >= min_edge for x in [p1_vs_model, p1_vs_pin, p1_vs_mkt])
+        p2_has_edge = any(x is not None and x >= min_edge for x in [p2_vs_model, p2_vs_pin, p2_vs_mkt])
         books_attr = " ".join(v["books"].keys())
 
         # Book columns (in canonical order)
@@ -607,9 +635,22 @@ function filterByBook(book) {{
         <div class="book-line">{p2_line}</div>
       </div>"""
 
-        # Our model + edge columns
+        # Three edge signal columns: vs. Mdl | vs. PIN | Sharp Δ
         model_html = ""
         if has_model and v["p1_our_prob"] is not None:
+            pin_cols_html = ""
+            if has_pin_data:
+                pin_cols_html = f"""
+      <div class="book-col edge-col">
+        <div class="book-label">vs. PIN</div>
+        <div class="book-line">{_fe(p1_vs_pin)}</div>
+        <div class="book-line">{_fe(p2_vs_pin)}</div>
+      </div>
+      <div class="book-col edge-col mkt-col">
+        <div class="book-label">Sharp &#916;</div>
+        <div class="book-line">{_fe(p1_vs_mkt, threshold=0.03)}</div>
+        <div class="book-line">{_fe(p2_vs_mkt, threshold=0.03)}</div>
+      </div>"""
             model_html = f"""
       <div class="book-col model-col">
         <div class="book-label">Our Model</div>
@@ -617,10 +658,10 @@ function filterByBook(book) {{
         <div class="book-line">{_american(v['p2_our_prob'])}</div>
       </div>
       <div class="book-col edge-col">
-        <div class="book-label">{edge_label}</div>
-        <div class="book-line">{_fe(p1e)}</div>
-        <div class="book-line">{_fe(p2e)}</div>
-      </div>"""
+        <div class="book-label">vs. Mdl</div>
+        <div class="book-line">{_fe(p1_vs_model)}</div>
+        <div class="book-line">{_fe(p2_vs_model)}</div>
+      </div>{pin_cols_html}"""
 
         p1_cls = "mu-player player-edge" if p1_has_edge else "mu-player"
         p2_cls = "mu-player player-edge" if p2_has_edge else "mu-player"
@@ -679,6 +720,8 @@ _CSS = """
   .book-line { text-align: right; font-size: 13px; }
   .model-col .book-line { color: #90cdf4; }
   .edge-col .book-line { font-weight: 500; }
+  .mkt-col .book-label { color: #f6ad55; }
+  .mkt-col .book-line { font-weight: 500; color: #a0aec0; }
   span.neg { color: #4a5568; }
   .reg-header { font-size: 14px; color: #63b3ed; margin: 28px 0 4px; font-weight: 600; }
   .reg-meta { color: #718096; font-size: 11px; margin-bottom: 12px; }
