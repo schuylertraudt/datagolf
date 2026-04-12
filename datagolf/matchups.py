@@ -142,8 +142,22 @@ def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.Dat
         else:
             p1_our = p2_our = None
 
-        # Real sportsbooks (exclude 'datagolf' pseudo-book)
-        books_found = [k for k in odds_section.keys() if k != "datagolf"]
+        # Pinnacle — sharp reference market (hidden from display, used as edge benchmark).
+        # Sharp bettors measure edge vs. the most efficient market, not the softest book.
+        pin_odds = odds_section.get("pinnacle") or {}
+        p1_pin_raw = american_to_prob(_to_float(pin_odds.get("p1")))
+        p2_pin_raw = american_to_prob(_to_float(pin_odds.get("p2")))
+        if p1_pin_raw is not None and p2_pin_raw is not None:
+            p1_pin_fair, p2_pin_fair = remove_vig(p1_pin_raw, p2_pin_raw)
+        else:
+            p1_pin_fair = p2_pin_fair = None
+
+        # Edge vs. Pinnacle (sharp market reference — same for all book rows of this matchup)
+        p1_pin_edge = (p1_our - p1_pin_fair) if (p1_our is not None and p1_pin_fair is not None) else None
+        p2_pin_edge = (p2_our - p2_pin_fair) if (p2_our is not None and p2_pin_fair is not None) else None
+
+        # Real sportsbooks (exclude 'datagolf' pseudo-book and 'pinnacle' sharp-reference)
+        books_found = [k for k in odds_section.keys() if k not in ("datagolf", "pinnacle")]
         if not books_found:
             books_found = [None]
 
@@ -165,9 +179,13 @@ def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.Dat
                 p1_mkt_fair = p2_mkt_fair = None
                 p1_odds_raw = p2_odds_raw = None
 
-            # Edge vs market
+            # Edge vs soft book (secondary, used as fallback when Pinnacle unavailable)
             p1_edge = (p1_our - p1_mkt_fair) if (p1_our is not None and p1_mkt_fair is not None) else None
             p2_edge = (p2_our - p2_mkt_fair) if (p2_our is not None and p2_mkt_fair is not None) else None
+
+            # max_edge: prefer Pinnacle-based edge; fall back to soft-book edge.
+            _p1_best = p1_pin_edge if p1_pin_edge is not None else (p1_edge if p1_edge is not None else 0)
+            _p2_best = p2_pin_edge if p2_pin_edge is not None else (p2_edge if p2_edge is not None else 0)
 
             rows.append({
                 "p1_name":       p1_name,
@@ -185,13 +203,15 @@ def parse_matchups(raw: dict, model_df: Optional[pd.DataFrame] = None) -> pd.Dat
                 # Our model probs
                 "p1_our_prob":   p1_our,
                 "p2_our_prob":   p2_our,
-                # Edges
+                # Pinnacle (sharp reference) probs and edges
+                "p1_pin_prob":   p1_pin_fair,
+                "p2_pin_prob":   p2_pin_fair,
+                "p1_pin_edge":   p1_pin_edge,
+                "p2_pin_edge":   p2_pin_edge,
+                # Soft-book edges (fallback)
                 "p1_edge":       p1_edge,
                 "p2_edge":       p2_edge,
-                "max_edge":      max(
-                    p1_edge if p1_edge is not None else 0,
-                    p2_edge if p2_edge is not None else 0,
-                ),
+                "max_edge":      max(_p1_best, _p2_best),
             })
 
     df = pd.DataFrame(rows)

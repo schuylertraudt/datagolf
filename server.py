@@ -481,7 +481,8 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
     has_model = "p1_our_prob" in mu_df.columns and mu_df["p1_our_prob"].notna().any()
 
     # Group rows by matchup pair, collecting all books.
-    # Edge is only stored from displayable books so the displayed numbers are consistent.
+    # Pinnacle edge is the primary signal (sharp market reference).
+    # Soft-book edge is stored as fallback when Pinnacle data isn't available.
     pair_data: dict = {}
     for _, r in mu_df.iterrows():
         key = (r["p1_name"], r["p2_name"])
@@ -489,17 +490,28 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
         is_displayable = bool(book and book in _BOOK_DISPLAY)
 
         if key not in pair_data:
+            # Pinnacle edge is matchup-level (same across all book rows for this pair)
+            p1_pe = r.get("p1_pin_edge")
+            p2_pe = r.get("p2_pin_edge")
+            has_pin = p1_pe is not None or p2_pe is not None
+            pin_max = max(p1_pe if p1_pe is not None else 0, p2_pe if p2_pe is not None else 0)
             pair_data[key] = {
-                "p1_our_prob": r.get("p1_our_prob"),
-                "p2_our_prob": r.get("p2_our_prob"),
-                # Seed edge only if this first row is from a displayable book
+                "p1_our_prob":  r.get("p1_our_prob"),
+                "p2_our_prob":  r.get("p2_our_prob"),
+                "p1_pin_prob":  r.get("p1_pin_prob"),
+                "p2_pin_prob":  r.get("p2_pin_prob"),
+                "p1_pin_edge":  p1_pe,
+                "p2_pin_edge":  p2_pe,
+                "has_pin":      has_pin,
+                # Soft-book edges (fallback); seed only from displayable books
                 "p1_edge": r.get("p1_edge") if is_displayable else None,
                 "p2_edge": r.get("p2_edge") if is_displayable else None,
-                "max_edge": float(r.get("max_edge") or 0) if is_displayable else 0.0,
+                # max_edge drives sorting and the ≥5% filter
+                "max_edge": pin_max if has_pin else (float(r.get("max_edge") or 0) if is_displayable else 0.0),
                 "books": {},
             }
-        elif is_displayable:
-            # Update edge if this displayable book gives a better max edge
+        elif is_displayable and not pair_data[key]["has_pin"]:
+            # No Pinnacle: update soft-book edge if this book gives a better number
             new_max = float(r.get("max_edge") or 0)
             if new_max > pair_data[key]["max_edge"]:
                 pair_data[key]["p1_edge"] = r.get("p1_edge")
@@ -522,6 +534,10 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
 
     if not sorted_pairs:
         return f"<p class='dim'>No matchups with edge ≥ 5% for {round_label}. Lines may not be posted yet, or the market is well-priced.</p>"
+
+    # Determine if Pinnacle data is present for any matchup (drives edge column label)
+    has_pin_data = any(v.get("has_pin") for _, v in sorted_pairs)
+    edge_label = "vs. PIN" if has_pin_data else "Edge"
 
     # Collect books in order of first appearance
     all_books: list = []
@@ -564,8 +580,13 @@ function filterByBook(book) {{
 
     cards = []
     for (p1, p2), v in sorted_pairs:
-        p1e = v["p1_edge"]
-        p2e = v["p2_edge"]
+        # Use Pinnacle edge if available; fall back to soft-book edge
+        if v.get("has_pin"):
+            p1e = v["p1_pin_edge"]
+            p2e = v["p2_pin_edge"]
+        else:
+            p1e = v["p1_edge"]
+            p2e = v["p2_edge"]
         p1_has_edge = p1e is not None and p1e >= min_edge
         p2_has_edge = p2e is not None and p2e >= min_edge
         books_attr = " ".join(v["books"].keys())
@@ -596,7 +617,7 @@ function filterByBook(book) {{
         <div class="book-line">{_american(v['p2_our_prob'])}</div>
       </div>
       <div class="book-col edge-col">
-        <div class="book-label">Edge</div>
+        <div class="book-label">{edge_label}</div>
         <div class="book-line">{_fe(p1e)}</div>
         <div class="book-line">{_fe(p2e)}</div>
       </div>"""
@@ -856,6 +877,37 @@ def debug_regression():
     except Exception as e:
         result["error"] = _tb.format_exc()
 
+    return jsonify(result)
+
+
+@app.route("/debug/books")
+def debug_books():
+    """Show all book keys returned by the DataGolf matchups endpoint for a live matchup."""
+    import traceback as _tb
+    from dotenv import load_dotenv as _lde
+    _lde()
+    api_key = os.getenv("DATAGOLF_API_KEY")
+    result = {}
+    try:
+        client = DataGolfClient(api_key)
+        settings = load_settings()
+        tour = settings.get("tour", "pga")
+        mu_raw = client.get_matchups(tour=tour)
+        matchups = mu_raw.get("match_list") or mu_raw.get("matchups") or mu_raw.get("data", [])
+        result["matchup_count"] = len(matchups)
+        if matchups:
+            sample = matchups[0]
+            odds_section = sample.get("odds") or {}
+            result["books_available"] = sorted(odds_section.keys())
+            result["has_pinnacle"] = "pinnacle" in odds_section
+            result["sample_p1"] = sample.get("p1_player_name") or sample.get("p1")
+            result["sample_p2"] = sample.get("p2_player_name") or sample.get("p2")
+            # Show Pinnacle lines if present
+            pin = odds_section.get("pinnacle") or {}
+            result["pinnacle_lines"] = pin
+            result["datagolf_lines"] = odds_section.get("datagolf") or {}
+    except Exception:
+        result["error"] = _tb.format_exc()
     return jsonify(result)
 
 
