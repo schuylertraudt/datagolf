@@ -4,6 +4,17 @@ This is a Flask-based golf betting tool that pulls live DataGolf API data,
 applies a proprietary matchup model, and serves a web UI with rankings and
 matchup edge analysis.
 
+## Git Workflow
+
+**Work directly on `main`.** This is a solo project — no PR review process,
+no CI pipeline to protect. Commit directly to main and push when done.
+Do not create feature branches unless explicitly asked.
+
+After any `server.py` change, restart the service:
+```bash
+systemctl restart datagolf
+```
+
 ---
 
 ## File Map
