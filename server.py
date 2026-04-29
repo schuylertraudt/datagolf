@@ -603,6 +603,11 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
         return f"<p class='dim'>No matchups with edge ≥ 5% for {round_label}. Lines may not be posted yet, or the market is well-priced.</p>"
 
     has_pin_data = any(v.get("has_pin") for _, v in sorted_pairs)
+    has_mkt_data = any(
+        v["book_edges"].get("all", {}).get("p1_vs_mkt") is not None
+        or v["book_edges"].get("all", {}).get("p2_vs_mkt") is not None
+        for _, v in sorted_pairs
+    )
 
     seen_books: set = set()
     for _, v in sorted_pairs:
@@ -711,14 +716,17 @@ function filterByBook(book) {{
         # Analysis columns (our model odds + three edge signals)
         analysis_html = ""
         if has_model and v["p1_our_prob"] is not None:
-            pin_edge_html = ""
+            pin_col_html = ""
             if has_pin_data:
-                pin_edge_html = f"""
+                pin_col_html = f"""
       <div class="book-col edge-col" data-edge-type="vs_pin" data-threshold="0.05">
         <div class="book-label">vs Pinnacle</div>
         <div class="book-line" data-player="p1">{_fe(ae.get('p1_vs_pin'))}</div>
         <div class="book-line" data-player="p2">{_fe(ae.get('p2_vs_pin'))}</div>
-      </div>
+      </div>"""
+            mkt_col_html = ""
+            if has_mkt_data:
+                mkt_col_html = f"""
       <div class="book-col edge-col mkt-col" data-edge-type="vs_mkt" data-threshold="0.03">
         <div class="book-label">vs Market</div>
         <div class="book-line" data-player="p1">{_fe(ae.get('p1_vs_mkt'), threshold=0.03)}</div>
@@ -734,7 +742,7 @@ function filterByBook(book) {{
         <div class="book-label">vs Our Odds</div>
         <div class="book-line" data-player="p1">{_fe(ae.get('p1_vs_our'))}</div>
         <div class="book-line" data-player="p2">{_fe(ae.get('p2_vs_our'))}</div>
-      </div>{pin_edge_html}"""
+      </div>{pin_col_html}{mkt_col_html}"""
 
         p1_cls = "mu-player player-edge" if p1_has_edge else "mu-player"
         p2_cls = "mu-player player-edge" if p2_has_edge else "mu-player"
