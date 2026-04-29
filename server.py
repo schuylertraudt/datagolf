@@ -29,7 +29,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request
 
 from datagolf.client import DataGolfClient
 from datagolf.matchups import parse_matchups
-from datagolf.pgatour import PGATourStats
+from datagolf.pgatour import CURATED_STATS, PGATourStats
 from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel
 
 WEEKLY_STATS_FILE = "weekly_stats.json"
@@ -973,7 +973,21 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
 
     <div class="settings-section">
       <h2>Weekly Stats Overlay</h2>
-      <p class="settings-hint">PGA Tour stat IDs from pgatour.com/stats/detail/&lt;ID&gt;. Shown as extra columns on the rankings page.</p>
+      <p class="settings-hint">Choose stats from the catalog or enter a custom ID from pgatour.com/stats/detail/&lt;ID&gt;. Shown as extra columns on the rankings page.</p>
+
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <select class="si" id="stat-catalog" style="width:260px">
+          {% for group in catalog %}
+          <optgroup label="{{ group.category }}">
+            {% for stat in group.stats %}
+            <option value="{{ stat.id }}" data-title="{{ stat.title }}">{{ stat.title }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        <button type="button" class="btn-add" onclick="addFromCatalog()">+ Add</button>
+      </div>
+
       <div class="stat-rows" id="stat-rows">
         {% for stat in ws_stats %}
         <div class="stat-row">
@@ -983,8 +997,9 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
         </div>
         {% endfor %}
       </div>
-      <button type="button" class="btn-add" onclick="addStatRow()">+ Add Stat</button>
-      <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
+      <button type="button" class="btn-add" onclick="addStatRow()" style="margin-bottom:14px">+ Custom stat</button>
+
+      <div style="margin-top:6px;display:flex;align-items:center;gap:10px">
         <label style="color:#a0aec0;font-size:12px">Season blend weight:</label>
         <input class="si" type="number" name="season_weight" value="{{ ws_season_weight }}" min="0" max="1" step="0.05">
         <span class="settings-hint" style="margin:0">0.6 = 60% current season, 40% prior</span>
@@ -995,13 +1010,19 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
   </form>
 
   <script>
-  function addStatRow() {
+  function _makeStatRow(id, label) {
     var row = document.createElement('div');
     row.className = 'stat-row';
-    row.innerHTML = '<input type="text" class="sid" name="stat_id" placeholder="Stat ID">'
-                  + '<input type="text" class="slbl" name="stat_label" placeholder="Label">'
+    row.innerHTML = '<input type="text" class="sid" name="stat_id" placeholder="Stat ID" value="' + (id || '') + '">'
+                  + '<input type="text" class="slbl" name="stat_label" placeholder="Label" value="' + (label || '') + '">'
                   + '<button type="button" class="btn-danger" onclick="this.parentElement.remove()">&#x2715;</button>';
     document.getElementById('stat-rows').appendChild(row);
+  }
+  function addStatRow() { _makeStatRow('', ''); }
+  function addFromCatalog() {
+    var sel = document.getElementById('stat-catalog');
+    var opt = sel.options[sel.selectedIndex];
+    _makeStatRow(opt.value, opt.dataset.title || opt.text);
   }
   </script>
 </body>
@@ -1181,6 +1202,7 @@ def settings_page():
         tour=tour,
         ws_stats=ws_stats,
         ws_season_weight=ws_season_weight,
+        catalog=CURATED_STATS,
     )
 
 
