@@ -25,7 +25,7 @@ from datetime import datetime
 from threading import Lock
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template_string
+from flask import Flask, jsonify, redirect, render_template_string, request
 
 from datagolf.client import DataGolfClient
 from datagolf.matchups import parse_matchups
@@ -812,6 +812,26 @@ _CSS = """
   .reg-table { margin-bottom: 28px; width: auto; }
   .reg-table th, .reg-table td { padding: 5px 14px; }
   .reg-table th:first-child, .reg-table td:first-child { text-align: left; }
+  /* Settings page */
+  .settings-form { max-width: 640px; }
+  .settings-section { margin-bottom: 28px; }
+  .settings-section h2 { font-size: 14px; color: #63b3ed; margin-bottom: 10px; font-weight: 600; border-bottom: 1px solid #2d3748; padding-bottom: 6px; }
+  .settings-hint { color: #718096; font-size: 11px; margin-bottom: 10px; }
+  .settings-table { width: 100%; margin-bottom: 6px; }
+  .settings-table th { color: #718096; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 5px 8px; font-weight: normal; text-align: left; border-bottom: 1px solid #2d3748; }
+  .settings-table td { padding: 5px 8px; vertical-align: middle; border-bottom: 1px solid #1a202c; }
+  .settings-table td.desc-col { color: #4a5568; font-size: 11px; }
+  input.si { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; padding: 5px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 72px; }
+  select.si { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; padding: 5px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; }
+  .stat-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+  .stat-row { display: flex; align-items: center; gap: 8px; }
+  .stat-row .sid { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; padding: 5px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 84px; }
+  .stat-row .slbl { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; padding: 5px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 180px; }
+  .btn { padding: 7px 18px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; font-family: inherit; font-weight: 600; }
+  .btn-primary { background: #2b6cb0; color: #bee3f8; }
+  .btn-primary:hover { background: #2c5282; }
+  .btn-danger { padding: 4px 8px; background: #742a2a; color: #fed7d7; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-family: inherit; }
+  .btn-add { padding: 5px 12px; background: #276749; color: #c6f6d5; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; }
 """
 
 RANKINGS_TEMPLATE = """<!DOCTYPE html>
@@ -833,7 +853,8 @@ RANKINGS_TEMPLATE = """<!DOCTYPE html>
   <nav>
     <a class="nav-btn active" href="/">Rankings</a>
     <a class="nav-btn" href="/matchups">Matchups</a>
-    <a class="nav-btn" href="/refresh">↻ Refresh</a>
+    <a class="nav-btn" href="/settings">Settings</a>
+    <a class="nav-btn" href="/refresh">&#x21bb; Refresh</a>
   </nav>
 
   <table>
@@ -869,7 +890,8 @@ MATCHUPS_TEMPLATE = """<!DOCTYPE html>
   <nav>
     <a class="nav-btn" href="/">Rankings</a>
     <a class="nav-btn active" href="/matchups">Matchups</a>
-    <a class="nav-btn" href="/matchups/refresh">↻ Refresh</a>
+    <a class="nav-btn" href="/settings">Settings</a>
+    <a class="nav-btn" href="/matchups/refresh">&#x21bb; Refresh</a>
   </nav>
 
   {% if matchup_round %}
@@ -889,6 +911,99 @@ MATCHUPS_TEMPLATE = """<!DOCTYPE html>
   {% endif %}
 
   <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
+</body>
+</html>"""
+
+
+SETTINGS_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings &#8212; DataGolf</title>
+  <style>{{ css }}</style>
+</head>
+<body>
+  <h1>Settings</h1>
+  <div class="meta" style="margin-bottom:16px">Adjust model weights and stat overlays. Click Save &amp; Run to apply and re-fetch.</div>
+
+  <nav>
+    <a class="nav-btn" href="/">Rankings</a>
+    <a class="nav-btn" href="/matchups">Matchups</a>
+    <a class="nav-btn active" href="/settings">Settings</a>
+  </nav>
+
+  <form class="settings-form" method="POST" action="/settings">
+
+    <div class="settings-section">
+      <h2>SG Weights</h2>
+      <p class="settings-hint">Relative values &#8212; normalized to 100% automatically. Tune per course type.</p>
+      <table class="settings-table">
+        <thead><tr><th>Component</th><th>Weight</th><th class="desc-col">Note</th></tr></thead>
+        <tbody>
+          <tr><td>SG: Total</td><td><input class="si" type="number" name="w_sg_total" value="{{ wv.sg_total }}" min="0" max="100" step="1"></td><td class="desc-col">Overall SG baseline</td></tr>
+          <tr><td>Win Probability</td><td><input class="si" type="number" name="w_win_prob" value="{{ wv.win_prob }}" min="0" max="100" step="1"></td><td class="desc-col">DataGolf win model</td></tr>
+          <tr><td>SG: Approach</td><td><input class="si" type="number" name="w_sg_app" value="{{ wv.sg_app }}" min="0" max="100" step="1"></td><td class="desc-col">Biggest course differentiator</td></tr>
+          <tr><td>SG: Putting</td><td><input class="si" type="number" name="w_sg_putt" value="{{ wv.sg_putt }}" min="0" max="100" step="1"></td><td class="desc-col">Putting</td></tr>
+          <tr><td>SG: Off-the-Tee</td><td><input class="si" type="number" name="w_sg_ott" value="{{ wv.sg_ott }}" min="0" max="100" step="1"></td><td class="desc-col">Driving</td></tr>
+          <tr><td>SG: Around Green</td><td><input class="si" type="number" name="w_sg_arg" value="{{ wv.sg_arg }}" min="0" max="100" step="1"></td><td class="desc-col">Short game</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="settings-section">
+      <h2>History Window</h2>
+      <table class="settings-table">
+        <tbody>
+          <tr><td>Short window (rounds)</td><td><input class="si" type="number" name="short_rounds" value="{{ h.short_rounds }}" min="4" max="50" step="1"></td><td class="desc-col">Recent form window</td></tr>
+          <tr><td>Long window (rounds)</td><td><input class="si" type="number" name="long_rounds" value="{{ h.long_rounds }}" min="20" max="200" step="1"></td><td class="desc-col">Long-term baseline</td></tr>
+          <tr><td>Short-term weight</td><td><input class="si" type="number" name="short_weight" value="{{ h.short_weight }}" min="0" max="1" step="0.05"></td><td class="desc-col">0.60 = 60% recent, 40% long-term</td></tr>
+          <tr><td>DG model blend</td><td><input class="si" type="number" name="dg_weight" value="{{ h.dg_weight }}" min="0" max="1" step="0.05"></td><td class="desc-col">0.50 = 50% DG win prob, 50% our model</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="settings-section">
+      <h2>Tour</h2>
+      <select class="si" name="tour">
+        <option value="pga" {{ 'selected' if tour == 'pga' else '' }}>PGA Tour</option>
+        <option value="euro" {{ 'selected' if tour == 'euro' else '' }}>European Tour</option>
+      </select>
+    </div>
+
+    <div class="settings-section">
+      <h2>Weekly Stats Overlay</h2>
+      <p class="settings-hint">PGA Tour stat IDs from pgatour.com/stats/detail/&lt;ID&gt;. Shown as extra columns on the rankings page.</p>
+      <div class="stat-rows" id="stat-rows">
+        {% for stat in ws_stats %}
+        <div class="stat-row">
+          <input type="text" class="sid" name="stat_id" placeholder="Stat ID" value="{{ stat.id }}">
+          <input type="text" class="slbl" name="stat_label" placeholder="Label" value="{{ stat.label }}">
+          <button type="button" class="btn-danger" onclick="this.parentElement.remove()">&#x2715;</button>
+        </div>
+        {% endfor %}
+      </div>
+      <button type="button" class="btn-add" onclick="addStatRow()">+ Add Stat</button>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
+        <label style="color:#a0aec0;font-size:12px">Season blend weight:</label>
+        <input class="si" type="number" name="season_weight" value="{{ ws_season_weight }}" min="0" max="1" step="0.05">
+        <span class="settings-hint" style="margin:0">0.6 = 60% current season, 40% prior</span>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save &amp; Run Model</button>
+  </form>
+
+  <script>
+  function addStatRow() {
+    var row = document.createElement('div');
+    row.className = 'stat-row';
+    row.innerHTML = '<input type="text" class="sid" name="stat_id" placeholder="Stat ID">'
+                  + '<input type="text" class="slbl" name="stat_label" placeholder="Label">'
+                  + '<button type="button" class="btn-danger" onclick="this.parentElement.remove()">&#x2715;</button>';
+    document.getElementById('stat-rows').appendChild(row);
+  }
+  </script>
 </body>
 </html>"""
 
@@ -1036,6 +1151,90 @@ def debug_books():
     except Exception:
         result["error"] = _tb.format_exc()
     return jsonify(result)
+
+
+@app.route("/settings", methods=["GET"])
+def settings_page():
+    s = load_settings()
+    w = dict(DEFAULT_WEIGHTS)
+    w.update(s.get("weights", {}))
+    wv = {k: int(round(v * 100)) for k, v in w.items()}
+
+    h = dict(DEFAULT_SETTINGS["history"])
+    h.update(s.get("history", {}))
+
+    tour = s.get("tour", "pga")
+
+    ws_stats = []
+    ws_season_weight = 0.6
+    if os.path.exists(WEEKLY_STATS_FILE):
+        with open(WEEKLY_STATS_FILE) as f:
+            wsc = json.load(f)
+        ws_stats = wsc.get("stats", [])
+        ws_season_weight = wsc.get("season_blend", {}).get("current_weight", 0.6)
+
+    return render_template_string(
+        SETTINGS_TEMPLATE,
+        css=_CSS,
+        wv=wv,
+        h=h,
+        tour=tour,
+        ws_stats=ws_stats,
+        ws_season_weight=ws_season_weight,
+    )
+
+
+@app.route("/settings", methods=["POST"])
+def settings_save():
+    def _flt(key, default):
+        try:
+            return float(request.form.get(key, default))
+        except (ValueError, TypeError):
+            return float(default)
+
+    def _int(key, default):
+        try:
+            return int(request.form.get(key, default))
+        except (ValueError, TypeError):
+            return int(default)
+
+    weights = {
+        "sg_total": _flt("w_sg_total", 30) / 100,
+        "win_prob": _flt("w_win_prob", 30) / 100,
+        "sg_app":   _flt("w_sg_app",   15) / 100,
+        "sg_putt":  _flt("w_sg_putt",  12) / 100,
+        "sg_ott":   _flt("w_sg_ott",    8) / 100,
+        "sg_arg":   _flt("w_sg_arg",    5) / 100,
+    }
+
+    history = {
+        "short_rounds": _int("short_rounds", 12),
+        "long_rounds":  _int("long_rounds",  60),
+        "short_weight": _flt("short_weight", 0.60),
+        "dg_weight":    _flt("dg_weight",    0.50),
+    }
+
+    settings = {
+        "weights": weights,
+        "history": history,
+        "tour": request.form.get("tour", "pga"),
+    }
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+
+    stat_ids    = request.form.getlist("stat_id")
+    stat_labels = request.form.getlist("stat_label")
+    stats = [{"id": sid.strip(), "label": lbl.strip()}
+             for sid, lbl in zip(stat_ids, stat_labels) if sid.strip()]
+    weekly = {
+        "season_blend": {"current_weight": _flt("season_weight", 0.6)},
+        "stats": stats,
+    }
+    with open(WEEKLY_STATS_FILE, "w") as f:
+        json.dump(weekly, f, indent=2)
+
+    get_data(force=True)
+    return redirect("/")
 
 
 if __name__ == "__main__":
