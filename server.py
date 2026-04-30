@@ -28,11 +28,13 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template_string, request
 
 from datagolf.client import DataGolfClient
+from datagolf.dpworldtour import DP_CURATED_STATS, DPWorldTourStats
 from datagolf.matchups import parse_matchups
 from datagolf.pgatour import CURATED_STATS, PGATourStats
 from datagolf.ranking import DEFAULT_WEIGHTS, RankingModel
 
-WEEKLY_STATS_FILE = "weekly_stats.json"
+WEEKLY_STATS_FILE    = "weekly_stats.json"
+DP_WEEKLY_STATS_FILE = "dp_weekly_stats.json"
 
 
 def _load_weekly_stats():
@@ -44,6 +46,23 @@ def _load_weekly_stats():
         cfg = json.load(f)
     weight = cfg.get("season_blend", {}).get("current_weight") or auto_w
     return cfg.get("stats", []), weight
+
+
+def _load_dp_weekly_stats():
+    from datagolf.dpworldtour import auto_season_weight as _dp_auto_weight
+    auto_w, _ = _dp_auto_weight()
+    if not os.path.exists(DP_WEEKLY_STATS_FILE):
+        return [], auto_w
+    with open(DP_WEEKLY_STATS_FILE) as f:
+        cfg = json.load(f)
+    weight = cfg.get("season_blend", {}).get("current_weight") or auto_w
+    return cfg.get("stats", []), weight
+
+
+def _load_weekly_stats_for_tour(tour: str) -> tuple:
+    if tour == "euro":
+        return _load_dp_weekly_stats()
+    return _load_weekly_stats()
 
 # ---------------------------------------------------------------------------
 # Config
@@ -124,19 +143,24 @@ def _fetch(settings: dict) -> dict:
     )
     df = model.blend_win_probs(df, dg_weight=history.get("dg_weight", 0.5))
 
-    # Weekly PGA Tour stats
-    stat_configs, season_weight = _load_weekly_stats()
+    # Weekly tour stats overlay (PGA or DP World Tour depending on selected tour)
+    stat_configs, season_weight = _load_weekly_stats_for_tour(tour)
     extra_cols = []
     if stat_configs:
-        from datagolf.pgatour import _normalize_name
         import pandas as _pd
-        pga = PGATourStats()
+        if tour == "euro":
+            from datagolf.dpworldtour import DPWorldTourStats as _StatsClient
+            from datagolf.dpworldtour import _normalize_name as _stat_norm
+        else:
+            from datagolf.pgatour import PGATourStats as _StatsClient
+            from datagolf.pgatour import _normalize_name as _stat_norm
+        stats_client = _StatsClient()
         normalized_names = df["player_name"].apply(
-            lambda n: _normalize_name(str(n)) if not _pd.isna(n) else ""
+            lambda n: _stat_norm(str(n)) if not _pd.isna(n) else ""
         )
         for s in stat_configs:
             try:
-                stat_df = pga.get_combined_stat(s["id"], label=s.get("label"), current_weight=season_weight)
+                stat_df = stats_client.get_combined_stat(s["id"], label=s.get("label"), current_weight=season_weight)
                 col = f"{s.get('label', s['id'])} Rk"
                 lookup = stat_df.set_index("player_name")["combined_rank"]
                 df[col] = normalized_names.map(lookup)
@@ -973,10 +997,23 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
 
     <div class="settings-section">
       <h2>Weekly Stats Overlay</h2>
-      <p class="settings-hint">Choose stats from the catalog or enter a custom ID from pgatour.com/stats/detail/&lt;ID&gt;. Shown as extra columns on the rankings page.</p>
+      {% if tour == 'euro' %}
+      <p class="settings-hint" id="stat-hint">Choose stats from the catalog or enter a custom slug from europeantour.com/dpworld-tour/stats/&lt;year&gt;/&lt;slug&gt;/. Shown as extra columns on the rankings page.</p>
+      {% else %}
+      <p class="settings-hint" id="stat-hint">Choose stats from the catalog or enter a custom ID from pgatour.com/stats/detail/&lt;ID&gt;. Shown as extra columns on the rankings page.</p>
+      {% endif %}
 
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
         <select class="si" id="stat-catalog" style="width:260px">
+          {% if tour == 'euro' %}
+          {% for group in dp_catalog %}
+          <optgroup label="{{ group.category }}">
+            {% for stat in group.stats %}
+            <option value="{{ stat.id }}" data-title="{{ stat.title }}">{{ stat.title }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+          {% else %}
           {% for group in catalog %}
           <optgroup label="{{ group.category }}">
             {% for stat in group.stats %}
@@ -984,6 +1021,7 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
             {% endfor %}
           </optgroup>
           {% endfor %}
+          {% endif %}
         </select>
         <button type="button" class="btn-add" onclick="addFromCatalog()">+ Add</button>
       </div>
@@ -991,7 +1029,7 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
       <div class="stat-rows" id="stat-rows">
         {% for stat in ws_stats %}
         <div class="stat-row">
-          <input type="text" class="sid" name="stat_id" placeholder="Stat ID" value="{{ stat.id }}">
+          <input type="text" class="sid" name="stat_id" placeholder="{% if tour == 'euro' %}Stat slug{% else %}Stat ID{% endif %}" value="{{ stat.id }}">
           <input type="text" class="slbl" name="stat_label" placeholder="Label" value="{{ stat.label }}">
           <button type="button" class="btn-danger" onclick="this.parentElement.remove()">&#x2715;</button>
         </div>
@@ -1010,10 +1048,15 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
   </form>
 
   <script>
+  var _tourCode = {{ '"euro"' if tour == 'euro' else '"pga"' }};
+  var _pgaCatalog = {{ catalog | tojson }};
+  var _dpCatalog  = {{ dp_catalog | tojson }};
+
   function _makeStatRow(id, label) {
+    var placeholder = _tourCode === 'euro' ? 'Stat slug' : 'Stat ID';
     var row = document.createElement('div');
     row.className = 'stat-row';
-    row.innerHTML = '<input type="text" class="sid" name="stat_id" placeholder="Stat ID" value="' + (id || '') + '">'
+    row.innerHTML = '<input type="text" class="sid" name="stat_id" placeholder="' + placeholder + '" value="' + (id || '') + '">'
                   + '<input type="text" class="slbl" name="stat_label" placeholder="Label" value="' + (label || '') + '">'
                   + '<button type="button" class="btn-danger" onclick="this.parentElement.remove()">&#x2715;</button>';
     document.getElementById('stat-rows').appendChild(row);
@@ -1024,6 +1067,34 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
     var opt = sel.options[sel.selectedIndex];
     _makeStatRow(opt.value, opt.dataset.title || opt.text);
   }
+
+  // Rebuild the catalog dropdown when the tour selector changes
+  document.querySelector('select[name="tour"]').addEventListener('change', function() {
+    var newTour = this.value;
+    _tourCode = newTour;
+    var cat = newTour === 'euro' ? _dpCatalog : _pgaCatalog;
+    var sel = document.getElementById('stat-catalog');
+    sel.innerHTML = '';
+    cat.forEach(function(group) {
+      var og = document.createElement('optgroup');
+      og.label = group.category;
+      (group.stats || []).forEach(function(s) {
+        var opt = document.createElement('option');
+        opt.value = s.id;
+        opt.dataset.title = s.title;
+        opt.text = s.title;
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
+    });
+    // Update hint text
+    var hint = document.getElementById('stat-hint');
+    if (newTour === 'euro') {
+      hint.textContent = 'Choose stats from the catalog or enter a custom slug from europeantour.com/dpworld-tour/stats/<year>/<slug>/. Shown as extra columns on the rankings page.';
+    } else {
+      hint.textContent = 'Choose stats from the catalog or enter a custom ID from pgatour.com/stats/detail/<ID>. Shown as extra columns on the rankings page.';
+    }
+  });
   </script>
 </body>
 </html>"""
@@ -1186,10 +1257,12 @@ def settings_page():
 
     tour = s.get("tour", "pga")
 
+    # Load stat overlay config for whichever tour is active
+    ws_file = DP_WEEKLY_STATS_FILE if tour == "euro" else WEEKLY_STATS_FILE
     ws_stats = []
     ws_season_weight = 0.6
-    if os.path.exists(WEEKLY_STATS_FILE):
-        with open(WEEKLY_STATS_FILE) as f:
+    if os.path.exists(ws_file):
+        with open(ws_file) as f:
             wsc = json.load(f)
         ws_stats = wsc.get("stats", [])
         ws_season_weight = wsc.get("season_blend", {}).get("current_weight", 0.6)
@@ -1203,6 +1276,7 @@ def settings_page():
         ws_stats=ws_stats,
         ws_season_weight=ws_season_weight,
         catalog=CURATED_STATS,
+        dp_catalog=DP_CURATED_STATS,
     )
 
 
@@ -1252,7 +1326,10 @@ def settings_save():
         "season_blend": {"current_weight": _flt("season_weight", 0.6)},
         "stats": stats,
     }
-    with open(WEEKLY_STATS_FILE, "w") as f:
+    # Save to the tour-appropriate config file
+    saved_tour = request.form.get("tour", "pga")
+    weekly_file = DP_WEEKLY_STATS_FILE if saved_tour == "euro" else WEEKLY_STATS_FILE
+    with open(weekly_file, "w") as f:
         json.dump(weekly, f, indent=2)
 
     get_data(force=True)
