@@ -980,7 +980,7 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
           {% for group in catalog %}
           <optgroup label="{{ group.category }}">
             {% for stat in group.stats %}
-            <option value="{{ stat.id }}" data-title="{{ stat.title }}">{{ stat.title }}</option>
+            <option value="{{ stat.id }}">{{ stat.title }}</option>
             {% endfor %}
           </optgroup>
           {% endfor %}
@@ -1013,16 +1013,24 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
   function _makeStatRow(id, label) {
     var row = document.createElement('div');
     row.className = 'stat-row';
-    row.innerHTML = '<input type="text" class="sid" name="stat_id" placeholder="Stat ID" value="' + (id || '') + '">'
-                  + '<input type="text" class="slbl" name="stat_label" placeholder="Label" value="' + (label || '') + '">'
-                  + '<button type="button" class="btn-danger" onclick="this.parentElement.remove()">&#x2715;</button>';
+    var sid = document.createElement('input');
+    sid.type = 'text'; sid.className = 'sid'; sid.name = 'stat_id';
+    sid.placeholder = 'Stat ID'; sid.value = id || '';
+    var slbl = document.createElement('input');
+    slbl.type = 'text'; slbl.className = 'slbl'; slbl.name = 'stat_label';
+    slbl.placeholder = 'Label'; slbl.value = label || '';
+    var btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'btn-danger'; btn.textContent = '✕';
+    btn.onclick = function() { this.parentElement.remove(); };
+    row.appendChild(sid); row.appendChild(slbl); row.appendChild(btn);
     document.getElementById('stat-rows').appendChild(row);
   }
   function addStatRow() { _makeStatRow('', ''); }
   function addFromCatalog() {
     var sel = document.getElementById('stat-catalog');
+    if (!sel || sel.selectedIndex < 0) return;
     var opt = sel.options[sel.selectedIndex];
-    _makeStatRow(opt.value, opt.dataset.title || opt.text);
+    _makeStatRow(opt.value, opt.text);
   }
   </script>
 </body>
