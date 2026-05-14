@@ -395,7 +395,8 @@ def _rankings_to_html(df, extra_cols=None, dk_map=None) -> str:
             extra_cells += f"<td>{cell_val}</td>"
 
         rows.append(f"""
-        <tr>
+        <tr data-player="{name.lower()}">
+          <td class="star-cell"><button class="star-btn" data-player="{name.lower()}" onclick="toggleStar(this)">☆</button></td>
           <td class="dim">{int(r['rank'])}</td>
           <td class="name">{name}</td>
           <td>{_pct(r.get('win_prob'))}</td>
@@ -618,13 +619,31 @@ def _matchups_to_html(mu_df, min_edge: float = 0.05, matchup_round: str = "") ->
         if b in seen_books:
             options += f'      <option value="{b}">{_BOOK_DISPLAY[b]}</option>\n'
 
-    # JS: format edge value, and update edge columns + player highlights on book change
+    # JS: format edge value, book filter, star filter — all integrated
     filter_html = f"""<div class="filter-bar">
   <label for="bookFilter">Filter by book:</label>
   <select id="bookFilter" onchange="filterByBook(this.value)">
     {options}  </select>
+  <button class="star-filter-btn" id="muStarBtn" onclick="toggleMuStarFilter(this)">&#9734; Starred only</button>
 </div>
 <script>
+var _activeBook = 'all';
+var _muStarFilterOn = false;
+function _getStarred() {{
+  try {{ return new Set(JSON.parse(localStorage.getItem('starredPlayers') || '[]')); }}
+  catch(e) {{ return new Set(); }}
+}}
+function _saveStarred(s) {{ localStorage.setItem('starredPlayers', JSON.stringify([...s])); }}
+function toggleStar(btn) {{
+  var s = _getStarred(), p = btn.dataset.player;
+  if (s.has(p)) s.delete(p); else s.add(p);
+  _saveStarred(s);
+  document.querySelectorAll('.star-btn[data-player="' + p + '"]').forEach(function(b) {{
+    b.textContent = s.has(p) ? '★' : '☆';
+    b.classList.toggle('starred', s.has(p));
+  }});
+  if (_muStarFilterOn) _applyFilters();
+}}
 function _fmtEdge(val, thr) {{
   if (val === null || val === undefined) return "<span class='dim'>-</span>";
   var pct = (val * 100).toFixed(1);
@@ -632,18 +651,18 @@ function _fmtEdge(val, thr) {{
   return val >= thr ? "<span class='pos'>" + s + "</span>"
                     : "<span class='dim neg'>" + s + "</span>";
 }}
-function filterByBook(book) {{
+function _applyFilters() {{
+  var starred = _getStarred();
+  var book = _activeBook;
   document.querySelectorAll('.mu-card').forEach(function(card) {{
     var books = (card.dataset.books || '').split(' ');
-    if (book !== 'all' && books.indexOf(book) < 0) {{
-      card.style.display = 'none'; return;
-    }}
+    var bookOk = book === 'all' || books.indexOf(book) >= 0;
+    var starOk = !_muStarFilterOn || starred.has(card.dataset.p1 || '') || starred.has(card.dataset.p2 || '');
+    if (!bookOk || !starOk) {{ card.style.display = 'none'; return; }}
     card.style.display = '';
-    // Show/hide individual book columns
     card.querySelectorAll('.book-col[data-book]').forEach(function(col) {{
       col.style.display = (book === 'all' || col.dataset.book === book) ? '' : 'none';
     }});
-    // Update edge columns from book-specific data
     var edges = JSON.parse(card.dataset.edges || '{{}}');
     var e = edges[book] || edges['all'] || {{}};
     card.querySelectorAll('[data-edge-type]').forEach(function(col) {{
@@ -654,7 +673,6 @@ function filterByBook(book) {{
       if (p1el) p1el.innerHTML = _fmtEdge(e['p1_' + type], thr);
       if (p2el) p2el.innerHTML = _fmtEdge(e['p2_' + type], thr);
     }});
-    // Re-evaluate player name highlight for selected book
     card.querySelectorAll('.mu-player').forEach(function(el, idx) {{
       var pref = idx === 0 ? 'p1' : 'p2';
       var any  = ['vs_our','vs_pin','vs_mkt'].some(function(t) {{
@@ -664,6 +682,21 @@ function filterByBook(book) {{
     }});
   }});
 }}
+function filterByBook(book) {{ _activeBook = book; _applyFilters(); }}
+function toggleMuStarFilter(btn) {{
+  _muStarFilterOn = !_muStarFilterOn;
+  btn.textContent = _muStarFilterOn ? '★ Starred only' : '☆ Starred only';
+  btn.classList.toggle('active', _muStarFilterOn);
+  _applyFilters();
+}}
+document.addEventListener('DOMContentLoaded', function() {{
+  var s = _getStarred();
+  document.querySelectorAll('.star-btn').forEach(function(btn) {{
+    var p = btn.dataset.player;
+    btn.textContent = s.has(p) ? '★' : '☆';
+    btn.classList.toggle('starred', s.has(p));
+  }});
+}});
 </script>"""
 
     def _fe(val, threshold=None):
@@ -748,10 +781,10 @@ function filterByBook(book) {{
         p2_cls = "mu-player player-edge" if p2_has_edge else "mu-player"
 
         cards.append(f"""
-    <div class="mu-card" data-books="{books_attr}" data-edges='{edges_json}'>
+    <div class="mu-card" data-books="{books_attr}" data-edges='{edges_json}' data-p1="{p1.lower()}" data-p2="{p2.lower()}">
       <div class="mu-players">
-        <div class="{p1_cls}">{p1}</div>
-        <div class="{p2_cls}">{p2}</div>
+        <div style="display:flex;align-items:center;gap:4px"><button class="star-btn" data-player="{p1.lower()}" onclick="toggleStar(this)">☆</button><div class="{p1_cls}">{p1}</div></div>
+        <div style="display:flex;align-items:center;gap:4px"><button class="star-btn" data-player="{p2.lower()}" onclick="toggleStar(this)">☆</button><div class="{p2_cls}">{p2}</div></div>
       </div>
       <div class="mu-books">{book_cols_html}
         <div class="edge-sep"></div>{analysis_html}
@@ -832,6 +865,13 @@ _CSS = """
   .btn-primary:hover { background: #2c5282; }
   .btn-danger { padding: 4px 8px; background: #742a2a; color: #fed7d7; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-family: inherit; }
   .btn-add { padding: 5px 12px; background: #276749; color: #c6f6d5; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  /* Stars */
+  .star-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: #4a5568; padding: 0 2px; line-height: 1; vertical-align: middle; flex-shrink: 0; }
+  .star-btn.starred { color: #ecc94b; }
+  .star-btn:hover { color: #d4a843; }
+  .star-cell { text-align: center !important; padding: 5px 4px !important; width: 24px; }
+  .star-filter-btn { padding: 4px 10px; background: #2d3748; color: #a0aec0; border: 1px solid #4a5568; border-radius: 4px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .star-filter-btn.active { background: #744210; color: #fefcbf; border-color: #ecc94b; }
 """
 
 RANKINGS_TEMPLATE = """<!DOCTYPE html>
@@ -857,9 +897,13 @@ RANKINGS_TEMPLATE = """<!DOCTYPE html>
     <a class="nav-btn" href="/refresh">&#x21bb; Refresh</a>
   </nav>
 
+  <div style="margin-bottom:10px">
+    <button class="star-filter-btn" id="starFilterBtn" onclick="toggleStarFilter(this)">&#9734; Starred only</button>
+  </div>
+
   <table>
     <thead><tr>
-      <th>#</th><th>Player</th>
+      <th class="star-cell"></th><th>#</th><th>Player</th>
       <th>Win%</th><th>DK Odds</th><th>My Odds</th><th>EV%</th>
       <th>SG:OTT</th><th>SG:APP</th><th>SG:ARG</th><th>SG:PUT</th><th>SG:TOT</th>
       <th>Score</th>
@@ -869,6 +913,44 @@ RANKINGS_TEMPLATE = """<!DOCTYPE html>
   </table>
 
   <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
+
+  <script>
+  var _starFilterOn = false;
+  function _getStarred() {
+    try { return new Set(JSON.parse(localStorage.getItem('starredPlayers') || '[]')); }
+    catch(e) { return new Set(); }
+  }
+  function _saveStarred(s) { localStorage.setItem('starredPlayers', JSON.stringify([...s])); }
+  function toggleStar(btn) {
+    var s = _getStarred(), p = btn.dataset.player;
+    if (s.has(p)) s.delete(p); else s.add(p);
+    _saveStarred(s);
+    btn.textContent = s.has(p) ? '★' : '☆';
+    btn.classList.toggle('starred', s.has(p));
+    if (_starFilterOn) _applyStarFilter();
+  }
+  function _applyStarFilter() {
+    var s = _getStarred();
+    document.querySelectorAll('tbody tr').forEach(function(row) {
+      var p = row.dataset.player;
+      row.style.display = (!_starFilterOn || s.has(p)) ? '' : 'none';
+    });
+  }
+  function toggleStarFilter(btn) {
+    _starFilterOn = !_starFilterOn;
+    btn.textContent = _starFilterOn ? '★ Starred only' : '☆ Starred only';
+    btn.classList.toggle('active', _starFilterOn);
+    _applyStarFilter();
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    var s = _getStarred();
+    document.querySelectorAll('.star-btn').forEach(function(btn) {
+      var p = btn.dataset.player;
+      btn.textContent = s.has(p) ? '★' : '☆';
+      btn.classList.toggle('starred', s.has(p));
+    });
+  });
+  </script>
 </body>
 </html>"""
 
