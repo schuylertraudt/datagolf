@@ -136,6 +136,24 @@ class DataGolfClient:
             {"tour": tour, "odds_format": odds_format},
         )
 
+    def get_fantasy_projections(
+        self,
+        tour: str = "pga",
+        site: str = "draftkings",
+        slate: str = "main",
+    ) -> dict:
+        """
+        DataGolf fantasy point projections for DraftKings (and other DFS sites).
+        Returns projected points, salary, and ownership for each player.
+
+        site:  'draftkings', 'fanduel', 'yahoo'
+        slate: 'main', 'showdown', etc.
+        """
+        return self._get(
+            "preds/fantasy-projection-defaults",
+            {"tour": tour, "site": site, "slate": slate},
+        )
+
     def get_historical_sg_stats(
         self,
         tour: str = "pga",

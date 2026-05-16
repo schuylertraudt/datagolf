@@ -302,6 +302,16 @@ def _fetch(settings: dict) -> dict:
         or "Pre-Tournament Rankings"
     )
 
+    # DraftKings fantasy projections (DataGolf model)
+    dfs_proj_raw = None
+    try:
+        dfs_proj_raw = client.get_fantasy_projections(tour=tour)
+    except Exception:
+        pass
+
+    dfs_df = _parse_dfs_projections(dfs_proj_raw, df)
+    snake_html = _snake_to_html(dfs_df, event_name=event_name) if dfs_df is not None and not dfs_df.empty else ""
+
     return {
         "event_name": event_name,
         "rankings_html": _rankings_to_html(df, extra_cols, dk_map),
@@ -314,6 +324,8 @@ def _fetch(settings: dict) -> dict:
         "live_round": live_round,
         "weights": weights,
         "history": history,
+        "snake_html": snake_html,
+        "_dfs_proj_raw": dfs_proj_raw,
     }
 
 
@@ -420,6 +432,196 @@ def _fmt_odds(v):
         return f"+{int(v)}" if v > 0 else str(int(v))
     except Exception:
         return "-"
+
+
+def _parse_dfs_projections(raw: dict, model_df) -> "pd.DataFrame | None":
+    """
+    Parse DataGolf fantasy-projection-defaults response and merge with
+    model df to enrich with cut/top10 probabilities.
+
+    The API response is flexible — try multiple key names for each field
+    since DataGolf has changed them over time.
+    """
+    import pandas as _pd
+    from datagolf.matchups import _normalize_name as _nn
+
+    if not raw:
+        return None
+
+    # Locate player list — API returns either a top-level list or dict with a key
+    players = None
+    if isinstance(raw, list):
+        players = raw
+    elif isinstance(raw, dict):
+        for k in ("players", "projections", "data", "player_list"):
+            if k in raw and isinstance(raw[k], list):
+                players = raw[k]
+                break
+        if players is None:
+            # flat dict keyed by player? unlikely but handle gracefully
+            return None
+
+    if not players:
+        return None
+
+    rows = []
+    for p in players:
+        name_raw = (
+            p.get("player_name") or p.get("name") or p.get("player") or ""
+        ).strip()
+        if not name_raw:
+            continue
+
+        def _f(keys, default=None):
+            for k in keys:
+                v = p.get(k)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        pass
+            return default
+
+        proj_pts  = _f(["proj_points", "proj_pts", "projected_points", "fantasy_pts", "points"])
+        salary    = _f(["salary", "dk_salary", "dfs_salary"])
+        proj_own  = _f(["proj_ownership", "proj_own", "ownership", "projected_ownership"])
+
+        rows.append({
+            "player_name": name_raw,
+            "_norm": _nn(name_raw),
+            "proj_pts": proj_pts,
+            "salary": salary,
+            "proj_own": proj_own,
+        })
+
+    if not rows:
+        return None
+
+    dfs_df = _pd.DataFrame(rows)
+
+    # Merge model columns (make_cut_prob, top10_prob, sg_total, composite_score)
+    if model_df is not None and not model_df.empty:
+        mdl = model_df.copy()
+        mdl["_norm"] = mdl["player_name"].apply(
+            lambda n: _nn(str(n)) if not _pd.isna(n) else ""
+        )
+        merge_cols = [c for c in ["make_cut_prob", "top10_prob", "win_prob", "sg_total", "composite_score"] if c in mdl.columns]
+        dfs_df = dfs_df.merge(mdl[["_norm"] + merge_cols], on="_norm", how="left")
+
+    # Sort by projected points descending, NaN last
+    dfs_df = dfs_df.sort_values("proj_pts", ascending=False, na_position="last").reset_index(drop=True)
+    dfs_df["pick"] = dfs_df.index + 1
+
+    # Tier labels
+    def _tier(pick):
+        if pick <= 5:   return "Elite"
+        if pick <= 15:  return "Strong"
+        if pick <= 30:  return "Mid"
+        if pick <= 50:  return "Value"
+        return "Late"
+
+    dfs_df["tier"] = dfs_df["pick"].apply(_tier)
+    return dfs_df
+
+
+def _snake_to_html(dfs_df, event_name: str = "") -> str:
+    import pandas as _pd
+    import math as _math
+
+    if dfs_df is None or dfs_df.empty:
+        return "<p class='dim'>No DraftKings projection data available yet. Check back once the DataGolf model publishes projections for this event.</p>"
+
+    has_salary  = dfs_df["salary"].notna().any()
+    has_own     = dfs_df["proj_own"].notna().any()
+    has_cut     = "make_cut_prob" in dfs_df.columns and dfs_df["make_cut_prob"].notna().any()
+    has_top10   = "top10_prob"    in dfs_df.columns and dfs_df["top10_prob"].notna().any()
+    has_sg      = "sg_total"      in dfs_df.columns and dfs_df["sg_total"].notna().any()
+
+    def _safe(v):
+        if v is None: return None
+        try:
+            if _math.isnan(v): return None
+        except Exception: pass
+        return v
+
+    tiers = ["Elite", "Strong", "Mid", "Value", "Late"]
+    tier_colors = {
+        "Elite":  "#63b3ed",
+        "Strong": "#68d391",
+        "Mid":    "#a0aec0",
+        "Value":  "#f6ad55",
+        "Late":   "#718096",
+    }
+
+    header_cells = "<th></th><th>#</th><th>Player</th><th>DK Proj Pts</th>"
+    if has_salary:
+        header_cells += "<th>Salary</th>"
+    if has_own:
+        header_cells += "<th>Proj Own%</th>"
+    if has_cut:
+        header_cells += "<th>Cut%</th>"
+    if has_top10:
+        header_cells += "<th>Top10%</th>"
+    if has_sg:
+        header_cells += "<th>SG:Tot</th>"
+
+    sections = []
+    for tier in tiers:
+        tier_df = dfs_df[dfs_df["tier"] == tier]
+        if tier_df.empty:
+            continue
+        color = tier_colors[tier]
+        rows_html = []
+        for _, r in tier_df.iterrows():
+            name = r.get("player_name") or ""
+            pick = int(r["pick"])
+            proj = _safe(r.get("proj_pts"))
+            proj_html = f"<strong>{proj:.1f}</strong>" if proj is not None else "<span class='dim'>-</span>"
+
+            cut = _safe(r.get("make_cut_prob"))
+            cut_warn = cut is not None and cut < 0.70
+            cut_html = (
+                f"<span style='color:#fc8181'>{cut*100:.0f}%</span>" if cut_warn
+                else (f"{cut*100:.0f}%" if cut is not None else "<span class='dim'>-</span>")
+            )
+
+            cells = f"""
+          <td class="star-cell"><button class="star-btn" data-player="{name.lower()}" onclick="toggleStar(this)">☆</button></td>
+          <td class="dim">{pick}</td>
+          <td class="name">{name}</td>
+          <td>{proj_html}</td>"""
+
+            if has_salary:
+                sal = _safe(r.get("salary"))
+                cells += f"<td>{'${:,.0f}'.format(sal) if sal else '<span class=dim>-</span>'}</td>"
+            if has_own:
+                own = _safe(r.get("proj_own"))
+                own_pct = own * 100 if own is not None and own <= 1 else own
+                cells += f"<td>{'%.0f%%' % own_pct if own_pct is not None else '<span class=dim>-</span>'}</td>"
+            if has_cut:
+                cells += f"<td>{cut_html}</td>"
+            if has_top10:
+                top10 = _safe(r.get("top10_prob"))
+                cells += f"<td>{'%.0f%%' % (top10*100) if top10 is not None else '<span class=dim>-</span>'}</td>"
+            if has_sg:
+                sg = _safe(r.get("sg_total"))
+                cells += f"<td>{_num(sg, signed=True) if sg is not None else '<span class=dim>-</span>'}</td>"
+
+            rows_html.append(f"<tr>{cells}\n        </tr>")
+
+        sections.append(f"""
+  <tr class="tier-header">
+    <td colspan="20" style="color:{color};font-weight:600;font-size:12px;
+        text-transform:uppercase;letter-spacing:0.08em;padding:10px 8px 4px;
+        border-bottom:1px solid #2d3748;">{tier}</td>
+  </tr>
+  {"".join(rows_html)}""")
+
+    return f"""<table>
+  <thead><tr>{header_cells}</tr></thead>
+  <tbody>{"".join(sections)}
+  </tbody>
+</table>"""
 
 
 # Books to display and their labels (order matters for column order)
@@ -893,6 +1095,7 @@ RANKINGS_TEMPLATE = """<!DOCTYPE html>
   <nav>
     <a class="nav-btn active" href="/">Rankings</a>
     <a class="nav-btn" href="/matchups">Matchups</a>
+    <a class="nav-btn" href="/snake-draft">Snake Draft</a>
     <a class="nav-btn" href="/settings">Settings</a>
     <a class="nav-btn" href="/refresh">&#x21bb; Refresh</a>
   </nav>
@@ -972,6 +1175,7 @@ MATCHUPS_TEMPLATE = """<!DOCTYPE html>
   <nav>
     <a class="nav-btn" href="/">Rankings</a>
     <a class="nav-btn active" href="/matchups">Matchups</a>
+    <a class="nav-btn" href="/snake-draft">Snake Draft</a>
     <a class="nav-btn" href="/settings">Settings</a>
     <a class="nav-btn" href="/matchups/refresh">&#x21bb; Refresh</a>
   </nav>
@@ -1012,6 +1216,7 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
   <nav>
     <a class="nav-btn" href="/">Rankings</a>
     <a class="nav-btn" href="/matchups">Matchups</a>
+    <a class="nav-btn" href="/snake-draft">Snake Draft</a>
     <a class="nav-btn active" href="/settings">Settings</a>
   </nav>
 
@@ -1119,6 +1324,83 @@ SETTINGS_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
+SNAKE_DRAFT_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="300">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snake Draft &#8212; {{ event_name }}</title>
+  <style>{{ css }}</style>
+</head>
+<body>
+  {% if error %}<div class="error">&#9888; {{ error }} &#8212; showing last cached result.</div>{% endif %}
+
+  <h1>{{ event_name }}</h1>
+  <div class="meta">Updated: {{ cached_at }}</div>
+
+  <nav>
+    <a class="nav-btn" href="/">Rankings</a>
+    <a class="nav-btn" href="/matchups">Matchups</a>
+    <a class="nav-btn active" href="/snake-draft">Snake Draft</a>
+    <a class="nav-btn" href="/settings">Settings</a>
+    <a class="nav-btn" href="/snake-draft/refresh">&#x21bb; Refresh</a>
+  </nav>
+
+  <div style="margin-bottom:12px">
+    <button class="star-filter-btn" id="starFilterBtn" onclick="toggleStarFilter(this)">&#9734; Starred only</button>
+  </div>
+
+  <div class="meta" style="margin-bottom:12px">
+    Projections from DataGolf&#39;s DraftKings model. Red Cut% = below 70% &#8212; high miss-cut risk.
+    Stars sync with Rankings and Matchups pages.
+  </div>
+
+  {{ snake_html | safe }}
+
+  <p class="meta" style="margin-top:20px">Auto-refreshes every 5 minutes.</p>
+
+  <script>
+  var _starFilterOn = false;
+  function _getStarred() {
+    try { return new Set(JSON.parse(localStorage.getItem('starredPlayers') || '[]')); }
+    catch(e) { return new Set(); }
+  }
+  function toggleStar(btn) {
+    var s = _getStarred(), p = btn.dataset.player;
+    if (s.has(p)) s.delete(p); else s.add(p);
+    localStorage.setItem('starredPlayers', JSON.stringify([...s]));
+    btn.textContent = s.has(p) ? '★' : '☆';
+    btn.classList.toggle('starred', s.has(p));
+    if (_starFilterOn) _applyStarFilter();
+  }
+  function _applyStarFilter() {
+    var s = _getStarred();
+    document.querySelectorAll('tbody tr:not(.tier-header)').forEach(function(row) {
+      var btn = row.querySelector('.star-btn');
+      if (!btn) return;
+      row.style.display = (!_starFilterOn || s.has(btn.dataset.player)) ? '' : 'none';
+    });
+  }
+  function toggleStarFilter(btn) {
+    _starFilterOn = !_starFilterOn;
+    btn.textContent = _starFilterOn ? '★ Starred only' : '☆ Starred only';
+    btn.classList.toggle('active', _starFilterOn);
+    _applyStarFilter();
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    var s = _getStarred();
+    document.querySelectorAll('.star-btn').forEach(function(btn) {
+      var p = btn.dataset.player;
+      btn.textContent = s.has(p) ? '★' : '☆';
+      btn.classList.toggle('starred', s.has(p));
+    });
+  });
+  </script>
+</body>
+</html>"""
+
+
 # ---------------------------------------------------------------------------
 # Flask app
 # ---------------------------------------------------------------------------
@@ -1170,6 +1452,42 @@ def refresh():
 def matchups_refresh():
     get_data(force=True)
     return redirect("/matchups")
+
+
+@app.route("/snake-draft")
+def snake_draft():
+    data = get_data()
+    return render_template_string(
+        SNAKE_DRAFT_TEMPLATE,
+        css=_CSS,
+        event_name=data.get("event_name", "Snake Draft"),
+        cached_at=data.get("cached_at", "—"),
+        error=data.get("error"),
+        snake_html=data.get("snake_html", ""),
+    )
+
+
+@app.route("/snake-draft/refresh")
+def snake_draft_refresh():
+    get_data(force=True)
+    return redirect("/snake-draft")
+
+
+@app.route("/debug/dfs")
+def debug_dfs():
+    """Inspect the raw DataGolf fantasy projection response."""
+    data = get_data()
+    raw = data.get("_dfs_proj_raw")
+    if raw is None:
+        return json.dumps({"error": "No DFS projection data — API call may have failed or event not yet available."}), 200, {"Content-Type": "application/json"}
+    if isinstance(raw, list):
+        return json.dumps({"type": "list", "count": len(raw), "sample": raw[:2]}), 200, {"Content-Type": "application/json"}
+    if isinstance(raw, dict):
+        sample = {}
+        for k, v in raw.items():
+            sample[k] = v[:2] if isinstance(v, list) else v
+        return json.dumps({"type": "dict", "keys": list(raw.keys()), "sample": sample}), 200, {"Content-Type": "application/json"}
+    return json.dumps({"raw": str(raw)[:500]}), 200, {"Content-Type": "application/json"}
 
 
 @app.route("/api/data")
